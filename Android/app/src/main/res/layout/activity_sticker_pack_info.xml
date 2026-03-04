@@ -162,48 +162,65 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
+            android:layout_marginTop="16dp"
             android:visibility="gone">
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
                 android:background="?attr/colorOutlineVariant"
-                android:layout_marginTop="16dp"
                 android:layout_marginBottom="12dp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Publisher"
+                android:text="Links"
                 android:textSize="11sp"
                 android:textColor="?attr/colorOnSurfaceVariant"
                 android:textAllCaps="true"
                 android:letterSpacing="0.1"
-                android:layout_marginBottom="4dp" />
+                android:layout_marginBottom="8dp" />
 
-            <TextView android:id="@+id/view_webpage"
-                style="@style/InfoButtonStyle"
-                android:drawableStart="@drawable/sticker_3rdparty_web"
-                android:drawableLeft="@drawable/sticker_3rdparty_web"
-                android:text="@string/view_webpage" />
+            <TextView
+                android:id="@+id/view_webpage"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:text="🌐  Website"
+                android:textSize="14sp"
+                android:textColor="?attr/colorPrimary"
+                android:visibility="gone" />
 
-            <TextView android:id="@+id/send_email"
-                style="@style/InfoButtonStyle"
-                android:drawableStart="@drawable/sticker_3rdparty_email"
-                android:drawableLeft="@drawable/sticker_3rdparty_email"
-                android:text="@string/send_email" />
+            <TextView
+                android:id="@+id/send_email"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:text="✉  Email"
+                android:textSize="14sp"
+                android:textColor="?attr/colorPrimary"
+                android:visibility="gone" />
 
-            <TextView android:id="@+id/privacy_policy"
-                style="@style/InfoButtonStyle"
-                android:drawableStart="@drawable/sticker_3rdparty_privacy"
-                android:drawableLeft="@drawable/sticker_3rdparty_privacy"
-                android:text="@string/privacy_policy" />
+            <TextView
+                android:id="@+id/privacy_policy"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:text="🔒  Privacy Policy"
+                android:textSize="14sp"
+                android:textColor="?attr/colorPrimary"
+                android:visibility="gone" />
 
-            <TextView android:id="@+id/license_agreement"
-                style="@style/InfoButtonStyle"
-                android:drawableStart="@drawable/sticker_3rdparty_license"
-                android:drawableLeft="@drawable/sticker_3rdparty_license"
-                android:text="@string/license_agreement" />
+            <TextView
+                android:id="@+id/license_agreement"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="8dp"
+                android:text="📄  License Agreement"
+                android:textSize="14sp"
+                android:textColor="?attr/colorPrimary"
+                android:visibility="gone" />
+
         </LinearLayout>
 
     </LinearLayout>

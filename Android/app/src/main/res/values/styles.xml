@@ -5,6 +5,8 @@
     <style name="AppTheme" parent="Theme.Material3.DayNight">
         <!-- DynamicColors.applyToActivitiesIfAvailable() in StickerApplication handles Monet -->
         <item name="android:statusBarColor">@android:color/transparent</item>
+        <!-- Makes status bar icons dark when in light mode -->
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
         <!-- Toolbar/menu icon tint — use on-surface color, not primary -->
         <item name="colorControlNormal">?attr/colorOnSurface</item>
     </style>

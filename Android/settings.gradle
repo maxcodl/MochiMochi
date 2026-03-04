@@ -1,4 +1,6 @@
-/*
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}/*
  * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *

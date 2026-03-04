@@ -143,14 +143,33 @@ public class SettingsActivity extends BaseActivity {
         });
 
         // Donate button — the real currency is kidneys
-        donateButton.setOnClickListener(v ->
+        donateButton.setOnClickListener(v -> {
+            android.widget.ImageView memeView = new android.widget.ImageView(this);
+            memeView.setImageResource(R.drawable.kidney_meme);
+            memeView.setAdjustViewBounds(true);
+            int pad = (int) (16 * getResources().getDisplayMetrics().density);
+            memeView.setPadding(pad, pad, pad, 0);
+
             new AlertDialog.Builder(this)
                 .setTitle("❤️ Donate $69")
                 .setMessage("Send your kidney to Max ❤️")
-                .setPositiveButton("Gladly 💌", null)
+                .setPositiveButton("Gladly 💌", (dialog, which) -> {
+                    // Show the meme dialog
+                    android.widget.ImageView memeImg = new android.widget.ImageView(this);
+                    memeImg.setImageResource(R.drawable.kidney_meme);
+                    memeImg.setAdjustViewBounds(true);
+                    int p = (int) (12 * getResources().getDisplayMetrics().density);
+                    memeImg.setPadding(p, p, p, 0);
+
+                    new AlertDialog.Builder(this)
+                        .setTitle("🚑 Sending kidney to Max...")
+                        .setView(memeImg)
+                        .setPositiveButton("You're welcome ❤️", null)
+                        .show();
+                })
                 .setNegativeButton("Maybe later", null)
-                .show()
-        );
+                .show();
+        });
     }
 
     private void updateFolderDisplay() {

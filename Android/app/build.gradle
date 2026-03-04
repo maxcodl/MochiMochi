@@ -2,9 +2,6 @@ apply plugin: 'com.android.application'
 
 android {
     //the compression of webp file during build causes problem with FileDescriptor in ContentProvider.
-    aaptOptions {
-        noCompress "webp"
-    }
     compileSdkVersion 34
     defaultConfig {
         applicationId "com.kawai.mochii"
@@ -39,15 +36,19 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = '1.8'
-        targetCompatibility = '1.8'
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    packagingOptions {
+        jniLibs {
+            excludes += ['lib/*/libnative-imagetranscoder.so', 'lib/*/libnative-filters.so']
+        }
     }
 
-    packagingOptions {
-        exclude 'lib/*/libnative-imagetranscoder.so'
-        exclude 'lib/*/libnative-filters.so'
-    }
     namespace 'com.kawai.mochii'
+    androidResources {
+        noCompress 'webp'
+    }
 }
 
 dependencies {
@@ -59,7 +60,7 @@ dependencies {
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.4.0'
     implementation 'androidx.recyclerview:recyclerview:1.2.1'
     implementation 'androidx.constraintlayout:constraintlayout:2.1.0'
-    def fresco_version = '2.5.0'
+    def fresco_version = '3.6.0'
     implementation "com.facebook.fresco:fresco:$fresco_version"
     implementation "com.facebook.fresco:webpsupport:$fresco_version"
     implementation "com.facebook.fresco:animated-webp:$fresco_version"

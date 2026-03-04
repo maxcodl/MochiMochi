@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
@@ -18,23 +19,26 @@
             android:padding="16dp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content">
-            <TextView
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:textColor="?attr/colorOnSurface"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:text="@string/tray_icon_label"
-                android:layout_weight="1"/>
+
             <ImageView
                 android:id="@+id/tray_icon_preview"
-                android:background="?attr/colorSurfaceVariant"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
+                android:layout_width="67dp"
+                android:layout_height="57dp"
+                android:layout_marginEnd="12dp"
                 android:layout_marginRight="12dp"
-                android:scaleType="centerCrop"
+                android:background="?attr/colorSurfaceVariant"
                 android:contentDescription="@string/tray_icon_label"
-                android:layout_marginEnd="12dp"/>
+                android:scaleType="centerCrop" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/tray_icon_label"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/change_tray_icon_button"
                 android:layout_width="wrap_content"
@@ -64,13 +68,15 @@
                 android:layout_marginBottom="12dp"
                 android:hint="@string/edit_pack_name_hint"
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/pack_name_edit"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:maxLines="1"
+                    android:layout_height="43dp"
+                    android:imeOptions="actionNext"
                     android:inputType="text"
-                    android:imeOptions="actionNext"/>
+                    android:maxLines="1"
+                    android:textColorHint="#000000" />
             </com.google.android.material.textfield.TextInputLayout>
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/author_input_layout"
@@ -78,13 +84,15 @@
                 android:layout_height="wrap_content"
                 android:hint="@string/edit_author_hint"
                 style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
+
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/author_edit"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:maxLines="1"
+                    android:layout_height="43dp"
+                    android:imeOptions="actionDone"
                     android:inputType="text"
-                    android:imeOptions="actionDone"/>
+                    android:maxLines="1"
+                    android:textColorHint="#546E7A" />
             </com.google.android.material.textfield.TextInputLayout>
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
@@ -97,21 +105,18 @@
         android:layout_marginTop="16dp"
         android:layout_marginRight="20dp"
         android:layout_marginBottom="8dp">
+
         <TextView
+            android:id="@+id/sticker_count_text"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="Stickers"
+            android:textColor="?attr/colorOnSurface"
             android:textSize="14sp"
             android:textStyle="bold"
-            android:textColor="?attr/colorOnSurface"
-            android:id="@+id/stickers_header"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:text="Stickers"
-            android:layout_weight="1"/>
-        <TextView
-            android:textSize="12sp"
-            android:textColor="?attr/colorOnSurfaceVariant"
-            android:id="@+id/sticker_count_text"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"/>
+            tools:ignore="HardcodedText" />
+
     </LinearLayout>
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/sticker_grid"

@@ -25,12 +25,14 @@
         tools:visibility="visible" />
 
     <!-- Empty state shown when no packs are installed -->
+
+    <!-- FAB for importing a .wasticker file -->
     <LinearLayout
         android:id="@+id/empty_state_layout"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical"
         android:gravity="center"
+        android:orientation="vertical"
         android:padding="32dp"
         android:visibility="gone"
         tools:visibility="visible">
@@ -38,19 +40,18 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp"
             android:gravity="center"
             android:text="No sticker packs installed yet.\nImport a .wasticker file to get started."
-            android:textSize="16sp"
-            android:layout_marginBottom="24dp"/>
+            android:textSize="16sp" />
 
         <Button
             android:id="@+id/import_button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Import .wasticker"/>
+            android:text="Import .wasticker" />
     </LinearLayout>
 
-    <!-- FAB for importing a .wasticker file -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/import_button_fab"
         android:layout_width="wrap_content"
