@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/sticker_preview_container"
+    android:layout_width="@dimen/sticker_pack_details_image_size"
+    android:layout_height="@dimen/sticker_pack_details_image_size">
+
+    <com.facebook.drawee.view.SimpleDraweeView
+        android:id="@+id/sticker_preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="@dimen/sticker_pack_details_image_padding"
+        android:scaleType="centerCrop" />
+
+    <ImageView
+        android:id="@+id/sticker_warning"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="4dp"
+        android:layout_marginEnd="4dp"
+        android:src="@drawable/ic_warning"
+        android:visibility="gone" />
+
+</FrameLayout>

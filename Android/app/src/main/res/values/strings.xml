@@ -1,0 +1,58 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- App name — change this to your app name -->
+    <string name="app_name">MochiMochi ジ</string>
+    <!-- Content description for the sticker pack tray image -->
+    <string name="tray_image_content_description">Sticker Pack Tray Image</string>
+    <!-- Title of info toolbar button -->
+    <string name="more_info_button">More info about sticker pack</string>
+    <!-- "Add to WhatsApp" button text -->
+    <string name="add_to_whatsapp">Add to WhatsApp</string>
+    <!-- Content description for the add (+) button on sticker pack list -->
+    <string name="add_button_content_description">Add sticker pack to WhatsApp</string>
+    <!-- Title of sticker pack list activity (singular/plural) -->
+    <plurals name="title_activity_sticker_packs_list">
+        <item quantity="one">Sticker Pack</item>
+        <item quantity="other">Sticker Packs</item>
+    </plurals>
+    <!-- Title of sticker pack details page when multiple packs exist -->
+    <string name="title_activity_sticker_pack_details_multiple_pack">Sticker details</string>
+    <!-- Title of sticker pack info page -->
+    <string name="title_activity_sticker_pack_info">Info</string>
+    <!-- Info page buttons -->
+    <string name="view_webpage">View webpage</string>
+    <string name="send_email">Send email</string>
+    <string name="privacy_policy">Privacy policy</string>
+    <string name="license_agreement">License agreement</string>
+    <string name="info_screen_tray_icon">Tray icon</string>
+    <!-- Already-added message -->
+    <string name="details_pack_already_added">Sticker pack added to WhatsApp</string>
+    <!-- Email chooser title -->
+    <string name="info_send_email_to_prompt">Send email with</string>
+    <!-- Failure messages -->
+    <string name="add_pack_fail_prompt_update_whatsapp">Sticker pack not added. If you\'d like to add it, make sure you update to the latest version of WhatsApp.</string>
+    <string name="add_pack_fail_prompt_update_play_link">Update</string>
+    <string name="cannot_find_play_store">Google Play is not installed on the device.</string>
+    <!-- Animated sticker indicator content description -->
+    <string name="sticker_pack_animation_indicator" tools:ignore="MissingTranslation">Animated sticker pack</string>
+    <!-- Tap-to-preview hint on details screen -->
+    <string name="sticker_pack_details_tap_to_preview" tools:ignore="MissingTranslation">Tap to preview sticker</string>
+    <!-- Edit/Create Pack screen strings -->
+    <string name="tray_icon_label">Tray Icon</string>
+    <string name="change_tray_icon">Change Tray Icon</string>
+    <string name="edit_pack_name_hint">Pack name</string>
+    <string name="edit_author_hint">Author name</string>
+    <string name="add_sticker">+ Add Sticker(s)</string>
+    <string name="save">Save</string>
+    <string name="remove_sticker">Remove sticker</string>
+    <string name="saving">Saving…</string>
+    <string name="edit_saved">Changes saved</string>
+    <string name="pack_created">Pack created successfully</string>
+    <string name="edit_pack">Edit Pack</string>
+    <string name="create_pack">Create Pack</string>
+    <string name="sticker_limit_reached">Sticker limit reached (30 max)</string>
+    <string name="pack_name_empty">Pack name cannot be empty</string>
+    <string name="sticker_count">%d stickers</string>
+    <string name="edit_button">Edit</string>
+    <string name="delete_button">Delete</string>
+    <string name="delete_pack_confirm">Delete this sticker pack?</string>
+</resources>

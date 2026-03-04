@@ -1,0 +1,210 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface"
+    tools:context=".StickerPackInfoActivity">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- ──── Header: tray icon + pack name + publisher ──── -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="20dp">
+
+            <ImageView
+                android:id="@+id/info_tray_image"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:adjustViewBounds="true"
+                android:contentDescription="Tray icon" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical"
+                android:layout_marginStart="16dp">
+
+                <TextView
+                    android:id="@+id/info_pack_name"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:textColor="?attr/colorOnSurface"
+                    tools:text="My Sticker Pack" />
+
+                <TextView
+                    android:id="@+id/info_publisher"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:visibility="gone"
+                    tools:text="Publisher"
+                    tools:visibility="visible" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Divider -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/colorOutlineVariant"
+            android:layout_marginBottom="16dp" />
+
+        <!-- ──── Pack Metadata ──── -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Pack Details"
+            android:textSize="11sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textAllCaps="true"
+            android:letterSpacing="0.1"
+            android:layout_marginBottom="12dp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Stickers"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurfaceVariant" />
+            <TextView android:id="@+id/info_sticker_count"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurface"
+                tools:text="30 stickers" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Total Size"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurfaceVariant" />
+            <TextView android:id="@+id/info_total_size"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurface"
+                tools:text="2.4 MB" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Type"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurfaceVariant" />
+            <TextView android:id="@+id/info_animated"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurface"
+                tools:text="Animated" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Pack ID"
+                android:textSize="14sp" android:textColor="?attr/colorOnSurfaceVariant" />
+            <TextView android:id="@+id/info_pack_id"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:textSize="13sp" android:textColor="?attr/colorOnSurface"
+                android:fontFamily="monospace"
+                tools:text="pack_id" />
+        </LinearLayout>
+
+        <!-- ──── Sticker List ──── -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/colorOutlineVariant"
+            android:layout_marginBottom="12dp" />
+
+        <TextView
+            android:id="@+id/info_stickers_header"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="11sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textAllCaps="true"
+            android:letterSpacing="0.1"
+            android:layout_marginBottom="4dp"
+            tools:text="STICKERS (30)" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/info_sticker_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:nestedScrollingEnabled="false"
+            android:clipToPadding="false" />
+
+        <!-- ──── Publisher Links (hidden if not set) ──── -->
+        <LinearLayout
+            android:id="@+id/publisher_links_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="?attr/colorOutlineVariant"
+                android:layout_marginTop="16dp"
+                android:layout_marginBottom="12dp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Publisher"
+                android:textSize="11sp"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textAllCaps="true"
+                android:letterSpacing="0.1"
+                android:layout_marginBottom="4dp" />
+
+            <TextView android:id="@+id/view_webpage"
+                style="@style/InfoButtonStyle"
+                android:drawableStart="@drawable/sticker_3rdparty_web"
+                android:drawableLeft="@drawable/sticker_3rdparty_web"
+                android:text="@string/view_webpage" />
+
+            <TextView android:id="@+id/send_email"
+                style="@style/InfoButtonStyle"
+                android:drawableStart="@drawable/sticker_3rdparty_email"
+                android:drawableLeft="@drawable/sticker_3rdparty_email"
+                android:text="@string/send_email" />
+
+            <TextView android:id="@+id/privacy_policy"
+                style="@style/InfoButtonStyle"
+                android:drawableStart="@drawable/sticker_3rdparty_privacy"
+                android:drawableLeft="@drawable/sticker_3rdparty_privacy"
+                android:text="@string/privacy_policy" />
+
+            <TextView android:id="@+id/license_agreement"
+                style="@style/InfoButtonStyle"
+                android:drawableStart="@drawable/sticker_3rdparty_license"
+                android:drawableLeft="@drawable/sticker_3rdparty_license"
+                android:text="@string/license_agreement" />
+        </LinearLayout>
+
+    </LinearLayout>
+</androidx.core.widget.NestedScrollView>

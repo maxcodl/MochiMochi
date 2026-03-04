@@ -1,0 +1,7 @@
+<!-- Original was a selector pointing to btn_green_normal.png and btn_green_pressed.png (PNGs, not recoverable).
+     Replace btn_green_normal and btn_green_pressed with XML shape drawables below. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/btn_green_pressed" android:state_pressed="true" />
+    <item android:drawable="@drawable/btn_green_pressed" android:state_enabled="true" android:state_focused="true" />
+    <item android:drawable="@drawable/btn_green_normal" />
+</selector>

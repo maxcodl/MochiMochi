@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Base application theme — Material3 DayNight + Monet -->
+    <style name="AppTheme" parent="Theme.Material3.DayNight">
+        <!-- DynamicColors.applyToActivitiesIfAvailable() in StickerApplication handles Monet -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <!-- Toolbar/menu icon tint — use on-surface color, not primary -->
+        <item name="colorControlNormal">?attr/colorOnSurface</item>
+    </style>
+
+    <!-- AMOLED Dark Theme: Monet accent + pitch-black backgrounds -->
+    <!-- DynamicColors is applied on top of this in BaseActivity -->
+    <style name="AppTheme.Amoled" parent="Theme.Material3.DayNight">
+        <item name="android:windowBackground">@color/amoled_background</item>
+        <item name="android:colorBackground">@color/amoled_background</item>
+        <item name="colorSurface">@color/amoled_background</item>
+        <item name="colorSurfaceVariant">@color/amoled_surface_variant</item>
+        <item name="android:navigationBarColor">@color/amoled_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
+        <item name="colorControlNormal">?attr/colorOnSurface</item>
+    </style>
+
+    <!-- Applied AFTER DynamicColors to restore black surfaces in AMOLED mode.
+         Monet accent/primary/secondary colors are kept; only surfaces go black. -->
+    <style name="ThemeOverlay.Amoled" parent="">
+        <item name="android:windowBackground">@color/amoled_background</item>
+        <item name="android:colorBackground">@color/amoled_background</item>
+        <item name="colorSurface">@color/amoled_background</item>
+        <item name="colorSurfaceVariant">@color/amoled_surface_variant</item>
+        <item name="colorSurfaceContainer">@color/amoled_background</item>
+        <item name="colorSurfaceContainerHigh">@color/amoled_surface_variant</item>
+        <item name="colorSurfaceContainerHighest">@color/amoled_surface_variant</item>
+        <item name="colorSurfaceContainerLow">@color/amoled_background</item>
+        <item name="colorSurfaceContainerLowest">@color/amoled_background</item>
+        <item name="android:navigationBarColor">@color/amoled_background</item>
+    </style>
+
+
+
+    <!-- Used by the "Add to WhatsApp" button text -->
+    <style name="StickerPreviewButtonText" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textColor">?attr/colorOnPrimary</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:textAllCaps">true</item>
+    </style>
+
+    <!-- Used by sticker pack list row metadata text (publisher, filesize, count) -->
+    <style name="sticker_packs_list_item_author_style">
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:lines">1</item>
+        <item name="android:textSize">12sp</item>
+    </style>
+
+    <!-- Used by info page (StickerPackInfoActivity) button rows -->
+    <style name="InfoButtonStyle">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:paddingLeft">31dp</item>
+        <item name="android:paddingStart" tools:targetApi="jelly_bean_mr1">24dp</item>
+        <item name="android:layout_marginTop">8dp</item>
+        <item name="android:drawablePadding">32dp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:foreground">?android:attr/selectableItemBackground</item>
+    </style>
+
+</resources>

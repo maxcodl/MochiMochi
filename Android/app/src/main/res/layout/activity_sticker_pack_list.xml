@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RECONSTRUCTED — the stub activity_sticker_pack_list.xml was missing
+     the empty state layout, import FAB, and edit toolbar.
+     IDs are derived from StickerPackListActivity.java source code. -->
+<androidx.coordinatorlayout.widget.CoordinatorLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <TextView
+        android:id="@+id/error_message"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:textColor="@android:color/holo_red_dark"
+        tools:text="@string/error_message" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/sticker_pack_list"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone"
+        tools:visibility="visible" />
+
+    <!-- Empty state shown when no packs are installed -->
+    <LinearLayout
+        android:id="@+id/empty_state_layout"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="32dp"
+        android:visibility="gone"
+        tools:visibility="visible">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="No sticker packs installed yet.\nImport a .wasticker file to get started."
+            android:textSize="16sp"
+            android:layout_marginBottom="24dp"/>
+
+        <Button
+            android:id="@+id/import_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Import .wasticker"/>
+    </LinearLayout>
+
+    <!-- FAB for importing a .wasticker file -->
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/import_button_fab"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="16dp"
+        android:contentDescription="Import sticker pack"
+        app:srcCompat="@drawable/ic_fab_add"
+        app:tint="@null"
+        app:layout_anchorGravity="bottom|right|end"
+        android:visibility="gone"
+        tools:visibility="visible"/>
+
+
+
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

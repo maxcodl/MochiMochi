@@ -1,0 +1,29 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
+ * All rights reserved.
+ *
+ * This source code is licensed under the BSD-style license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+
+package com.kawai.mochii;
+
+import android.app.Application;
+
+import com.facebook.drawee.backends.pipeline.Fresco;
+
+public class StickerApplication extends Application {
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        Fresco.initialize(this);
+
+        // Apply the saved night mode globally (light / dark / system).
+        // DynamicColors (Monet) is applied per-activity in BaseActivity.onCreate()
+        // AFTER the per-activity theme is set, so AMOLED gets the right surfaces.
+        android.content.SharedPreferences prefs = getSharedPreferences("mochii_prefs", MODE_PRIVATE);
+        int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(themeMode);
+    }
+}

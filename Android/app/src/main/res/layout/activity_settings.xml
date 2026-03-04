@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- RECONSTRUCTED from SettingsActivity.java field references.
+     The original file was replaced by a stub. This is the full version. -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Sticker Folder Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sticker Folder"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="4dp"/>
+
+        <TextView
+            android:id="@+id/current_folder_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Default (internal storage)"
+            android:textSize="14sp"
+            android:padding="12dp"
+            android:background="?attr/colorSurfaceVariant"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/choose_folder_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Choose Folder"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/reset_to_default_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Reset to Default"
+            android:layout_marginBottom="24dp"/>
+
+        <!-- Theme Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Theme"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="8dp"/>
+
+        <RadioGroup
+            android:id="@+id/theme_radio_group"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:layout_marginBottom="24dp">
+
+            <RadioButton
+                android:id="@+id/theme_light"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Light"/>
+
+            <RadioButton
+                android:id="@+id/theme_dark"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Dark"/>
+
+            <RadioButton
+                android:id="@+id/theme_amoled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="AMOLED Dark"/>
+
+            <RadioButton
+                android:id="@+id/theme_system"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="System Default"
+                android:checked="true"/>
+        </RadioGroup>
+
+        <!-- Import Behaviour -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="When importing a single sticker"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="8dp"/>
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/ask_pack_picker_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Ask which pack to add to"
+            android:layout_marginBottom="24dp"/>
+
+        <!-- Diagnostics Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Diagnostics"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/run_diagnostics_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Run Pack Diagnostics"
+            android:layout_marginBottom="24dp"/>
+
+        <!-- About Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="About"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="8dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Mochii — Sticker Manager"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="2dp"/>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="by Max"
+            android:textSize="14sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="16dp"/>
+
+        <Button
+            android:id="@+id/github_button"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="⭐  View on GitHub"
+            android:layout_marginBottom="8dp"/>
+
+        <Button
+            android:id="@+id/donate_button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="❤  Donate $69"/>
+
+    </LinearLayout>
+</ScrollView>
