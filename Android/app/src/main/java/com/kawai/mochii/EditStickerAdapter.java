@@ -11,6 +11,8 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.drawee.interfaces.DraweeController;
 import com.facebook.drawee.view.SimpleDraweeView;
 
 import java.util.ArrayList;
@@ -28,7 +30,7 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
         public StickerItem(String packIdentifier, String fileName, List<String> emojis) {
             this.packIdentifier = packIdentifier;
             this.fileName = fileName;
-            this.emojis = emojis != null ? emojis : new ArrayList<>();
+            this.emojis = emojis != null ? new ArrayList<>(emojis) : new ArrayList<>();
         }
 
         public StickerItem(Uri newUri) {
@@ -39,7 +41,7 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
 
     public interface OnStickerActionListener {
         void onRemoveClicked(int position);
-        void onStickerClicked(int position);
+        void onStickerClicked(int position, View stickerView);
     }
 
     private final List<StickerItem> items;
@@ -63,11 +65,20 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
         StickerItem item = items.get(position);
         Context context = holder.itemView.getContext();
 
+        Uri uri = null;
         if (item.newUri != null) {
-            holder.stickerImage.setImageURI(item.newUri);
+            uri = item.newUri;
         } else if (item.packIdentifier != null && item.fileName != null) {
-            holder.stickerImage.setImageURI(
-                    StickerPackLoader.getStickerAssetUri(item.packIdentifier, item.fileName));
+            uri = StickerPackLoader.getStickerAssetUri(item.packIdentifier, item.fileName);
+        }
+
+        if (uri != null) {
+            DraweeController controller = Fresco.newDraweeControllerBuilder()
+                    .setUri(uri)
+                    .setAutoPlayAnimations(true)
+                    .setOldController(holder.stickerImage.getController())
+                    .build();
+            holder.stickerImage.setController(controller);
         }
 
         // Show emojis
@@ -85,7 +96,7 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
         });
 
         holder.itemView.setOnClickListener(v -> {
-            if (listener != null) listener.onStickerClicked(position);
+            if (listener != null) listener.onStickerClicked(position, v);
         });
     }
 

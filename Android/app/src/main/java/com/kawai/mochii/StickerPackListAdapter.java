@@ -10,20 +10,23 @@ package com.kawai.mochii;
 
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.drawable.Drawable;
-import android.os.Build;
+import android.net.Uri;
 import android.text.format.Formatter;
-import android.util.TypedValue;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.drawee.interfaces.DraweeController;
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imagepipeline.request.ImageRequest;
+import com.facebook.imagepipeline.request.ImageRequestBuilder;
+import com.google.android.material.button.MaterialButton;
 
 import java.util.List;
 
@@ -38,6 +41,12 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
     StickerPackListAdapter(@NonNull List<StickerPack> stickerPacks, @NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
         this.stickerPacks = stickerPacks;
         this.onAddButtonClickedListener = onAddButtonClickedListener;
+        setHasStableIds(true);
+    }
+
+    @Override
+    public long getItemId(int position) {
+        return stickerPacks.get(position).identifier.hashCode();
     }
 
     @NonNull
@@ -76,13 +85,39 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         viewHolder.animatedStickerPackIndicator.setVisibility(pack.animatedStickerPack ? View.VISIBLE : View.GONE);
 
         // Populate sticker preview image row
-        viewHolder.imageRowView.removeAllViews();
         if (pack.getStickers() != null && maxNumberOfStickersInARow > 0) {
             final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
             int numToShow = Math.min(maxNumberOfStickersInARow, pack.getStickers().size());
+            boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(context);
+
+            // QUALITY FIX: Use the actual preview size instead of aggressive downscaling
+            int renderSize = previewSize;
+
+            int currentChildCount = viewHolder.imageRowView.getChildCount();
+            
+            // Critical fix for ClassCastException: remove any views that aren't SimpleDraweeView
+            for (int i = 0; i < currentChildCount; i++) {
+                if (!(viewHolder.imageRowView.getChildAt(i) instanceof SimpleDraweeView)) {
+                    viewHolder.imageRowView.removeViewAt(i);
+                    currentChildCount--;
+                    i--;
+                }
+            }
+
+            if (currentChildCount > numToShow) {
+                viewHolder.imageRowView.removeViews(numToShow, currentChildCount - numToShow);
+            }
+
             for (int i = 0; i < numToShow; i++) {
-                final SimpleDraweeView rowImage = (SimpleDraweeView) LayoutInflater.from(context)
-                        .inflate(R.layout.sticker_packs_list_image_item, viewHolder.imageRowView, false);
+                SimpleDraweeView rowImage;
+                if (i < viewHolder.imageRowView.getChildCount()) {
+                    rowImage = (SimpleDraweeView) viewHolder.imageRowView.getChildAt(i);
+                } else {
+                    rowImage = (SimpleDraweeView) LayoutInflater.from(context)
+                            .inflate(R.layout.sticker_packs_list_image_item, viewHolder.imageRowView, false);
+                    viewHolder.imageRowView.addView(rowImage);
+                }
+
                 rowImage.setLayoutParams(new LinearLayout.LayoutParams(previewSize, previewSize));
                 if (i != 0) {
                     LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) rowImage.getLayoutParams();
@@ -90,34 +125,49 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
                     lp.leftMargin = minMarginBetweenImages;
                     rowImage.setLayoutParams(lp);
                 }
-                final String fileUri = StickerPackLoader.getStickerAssetUri(
-                        pack.identifier, pack.getStickers().get(i).imageFileName).toString();
-                rowImage.setImageURI(fileUri);
-                viewHolder.imageRowView.addView(rowImage);
+                
+                final Uri fileUri = StickerPackLoader.getStickerAssetUri(
+                        pack.identifier, pack.getStickers().get(i).imageFileName);
+                
+                ImageRequest request = ImageRequestBuilder.newBuilderWithSource(fileUri)
+                        .setResizeOptions(new ResizeOptions(renderSize, renderSize))
+                        .build();
+
+                DraweeController controller = Fresco.newDraweeControllerBuilder()
+                        .setImageRequest(request)
+                        .setAutoPlayAnimations(animationsEnabled)
+                        .setOldController(rowImage.getController())
+                        .build();
+                rowImage.setController(controller);
+            }
+        } else {
+            viewHolder.imageRowView.removeAllViews();
+        }
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull StickerPackListItemViewHolder viewHolder) {
+        super.onViewRecycled(viewHolder);
+        // PERFORMANCE: Stop animations and release memory immediately when row scrolls away
+        for (int i = 0; i < viewHolder.imageRowView.getChildCount(); i++) {
+            View child = viewHolder.imageRowView.getChildAt(i);
+            if (child instanceof SimpleDraweeView) {
+                ((SimpleDraweeView) child).setController(null);
             }
         }
     }
 
-    private void setAddButtonAppearance(ImageView addButton, StickerPack pack) {
+    private void setAddButtonAppearance(MaterialButton addButton, StickerPack pack) {
         if (pack.getIsWhitelisted()) {
-            addButton.setImageResource(R.drawable.sticker_3rdparty_added);
+            addButton.setIconResource(R.drawable.sticker_3rdparty_added);
+            addButton.setAlpha(0.5f);
             addButton.setClickable(false);
             addButton.setOnClickListener(null);
-            setBackground(addButton, null);
         } else {
-            addButton.setImageResource(R.drawable.sticker_3rdparty_add);
+            addButton.setIconResource(R.drawable.sticker_3rdparty_add);
+            addButton.setAlpha(1.0f);
+            addButton.setClickable(true);
             addButton.setOnClickListener(v -> onAddButtonClickedListener.onAddButtonClicked(pack));
-            TypedValue outValue = new TypedValue();
-            addButton.getContext().getTheme().resolveAttribute(android.R.attr.selectableItemBackground, outValue, true);
-            addButton.setBackgroundResource(outValue.resourceId);
-        }
-    }
-
-    private void setBackground(View view, Drawable background) {
-        if (Build.VERSION.SDK_INT >= 16) {
-            view.setBackground(background);
-        } else {
-            view.setBackgroundDrawable(background);
         }
     }
 

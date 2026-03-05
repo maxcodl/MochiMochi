@@ -9,11 +9,12 @@
 package com.kawai.mochii;
 
 import android.view.View;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.recyclerview.widget.RecyclerView;
+
+import com.google.android.material.button.MaterialButton;
 
 class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
 
@@ -22,8 +23,8 @@ class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
     final TextView publisherView;
     final TextView filesizeView;
     final TextView countView;
-    final ImageView addButton;
-    final ImageView animatedStickerPackIndicator;
+    final MaterialButton addButton;
+    final View animatedStickerPackIndicator;
     final LinearLayout imageRowView;
 
     StickerPackListItemViewHolder(final View itemView) {

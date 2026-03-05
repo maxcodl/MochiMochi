@@ -1,34 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="90dp"
     android:layout_height="90dp">
+
     <com.facebook.drawee.view.SimpleDraweeView
         android:id="@+id/sticker_image"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:scaleType="centerCrop"/>
+        android:scaleType="centerCrop"
+        tools:src="@drawable/sticker_error" />
+
     <ImageButton
-        android:layout_gravity="end|top"
         android:id="@+id/remove_button"
-        android:background="@drawable/remove_button_bg"
-        android:padding="2dp"
         android:layout_width="24dp"
         android:layout_height="24dp"
+        android:layout_gravity="end|top"
         android:layout_margin="4dp"
-        android:src="@drawable/ic_close_x"
+        android:background="?attr/selectableItemBackgroundBorderless"
         android:contentDescription="@string/remove_sticker"
-        app:tint="@android:color/white"/>
+        android:padding="2dp"
+        android:src="@drawable/ic_cross"
+        app:tint="?attr/colorError" />
+
     <TextView
-        android:textSize="12sp"
-        android:textColor="@android:color/white"
-        android:ellipsize="end"
-        android:layout_gravity="bottom|center_horizontal"
         android:id="@+id/sticker_emojis_text"
-        android:background="?attr/colorSurfaceVariant"
-        android:paddingLeft="4dp"
-        android:paddingRight="4dp"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="4dp"
-        android:singleLine="true"/>
+        android:ellipsize="end"
+        android:paddingLeft="4dp"
+        android:paddingRight="4dp"
+        android:singleLine="true"
+        android:textColor="@android:color/white"
+        android:textSize="14sp"
+        android:shadowColor="#80000000"
+        android:shadowDx="1"
+        android:shadowDy="1"
+        android:shadowRadius="2"
+        tools:text="😀👍" />
 </FrameLayout>

@@ -1,32 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- RECONSTRUCTED — the stub activity_sticker_pack_list.xml was missing
-     the empty state layout, import FAB, and edit toolbar.
-     IDs are derived from StickerPackListActivity.java source code. -->
 <androidx.coordinatorlayout.widget.CoordinatorLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface">
 
-    <TextView
-        android:id="@+id/error_message"
-        android:layout_width="wrap_content"
+    <com.google.android.material.appbar.AppBarLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:padding="16dp"
-        android:textColor="@android:color/holo_red_dark"
-        tools:text="@string/error_message" />
+        android:background="?attr/colorSurface"
+        app:elevation="0dp">
+
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            app:layout_scrollFlags="scroll|enterAlways"
+            app:titleTextColor="?attr/colorOnSurface"
+            tools:title="@string/app_name" />
+
+    </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/sticker_pack_list"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:clipToPadding="false"
+        android:paddingTop="8dp"
+        android:paddingBottom="88dp"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior"
         android:visibility="gone"
-        tools:visibility="visible" />
+        tools:visibility="visible"
+        tools:listitem="@layout/sticker_packs_list_item" />
 
-    <!-- Empty state shown when no packs are installed -->
-
-    <!-- FAB for importing a .wasticker file -->
     <LinearLayout
         android:id="@+id/empty_state_layout"
         android:layout_width="match_parent"
@@ -37,34 +45,63 @@
         android:visibility="gone"
         tools:visibility="visible">
 
+        <ImageView
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:layout_marginBottom="24dp"
+            android:alpha="0.3"
+            android:src="@drawable/sticker_3rdparty_info"
+            app:tint="?attr/colorOnSurface" />
+
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="24dp"
             android:gravity="center"
-            android:text="No sticker packs installed yet.\nImport a .wasticker file to get started."
-            android:textSize="16sp" />
+            android:text="No sticker packs yet"
+            android:textAppearance="?attr/textAppearanceHeadlineSmall"
+            android:textColor="?attr/colorOnSurface"
+            android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/import_button"
+        <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Import .wasticker" />
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="32dp"
+            android:gravity="center"
+            android:text="Import a .wasticker file to start using your favorite stickers in WhatsApp."
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="14sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/import_button"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:text="Import .wasticker"
+            app:icon="@drawable/ic_fab_add" />
     </LinearLayout>
 
-    <com.google.android.material.floatingactionbutton.FloatingActionButton
+    <TextView
+        android:id="@+id/error_message"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:padding="16dp"
+        android:textColor="?attr/colorError"
+        android:visibility="gone"
+        tools:text="Error message" />
+
+    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
         android:id="@+id/import_button_fab"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_margin="16dp"
-        android:contentDescription="Import sticker pack"
-        app:srcCompat="@drawable/ic_fab_add"
-        app:tint="@null"
-        app:layout_anchorGravity="bottom|right|end"
+        android:text="Import"
+        app:icon="@drawable/ic_fab_add"
         android:visibility="gone"
         tools:visibility="visible"/>
-
-
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>

@@ -5,9 +5,14 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.format.Formatter;
+import android.view.LayoutInflater;
+import android.view.View;
 import android.widget.Button;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -16,19 +21,25 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatDelegate;
 
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.switchmaterial.SwitchMaterial;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class SettingsActivity extends BaseActivity {
     private static final String PREFS_NAME = "mochii_prefs";
     private static final String KEY_THEME = "theme_mode";
     private static final String KEY_ASK_PACK_PICKER = "ask_pack_picker";
+    public static final String KEY_ENABLE_ANIMATIONS = "enable_animations";
 
     private TextView currentFolderText;
     private ActivityResultLauncher<Intent> folderPickerLauncher;
     private static final String GITHUB_URL = "https://github.com/maxculen/Mochii-Stickere";
+    private static final ExecutorService repairExecutor = Executors.newSingleThreadExecutor();
+    private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,11 +56,11 @@ public class SettingsActivity extends BaseActivity {
         Button resetToDefaultButton = findViewById(R.id.reset_to_default_button);
         RadioGroup themeRadioGroup = findViewById(R.id.theme_radio_group);
         SwitchMaterial askPackPickerSwitch = findViewById(R.id.ask_pack_picker_switch);
+        SwitchMaterial enableAnimationsSwitch = findViewById(R.id.enable_animations_switch);
         Button runDiagnosticsButton = findViewById(R.id.run_diagnostics_button);
         Button githubButton = findViewById(R.id.github_button);
         Button donateButton = findViewById(R.id.donate_button);
 
-        // Setup folder picker
         folderPickerLauncher = registerForActivityResult(
                 new ActivityResultContracts.StartActivityForResult(),
                 result -> {
@@ -58,14 +69,12 @@ public class SettingsActivity extends BaseActivity {
                         if (treeUri != null) {
                             getContentResolver().takePersistableUriPermission(treeUri,
                                     Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                            String path = treeUri.toString();
-                            WastickerParser.setStickerFolderPath(this, path);
+                            WastickerParser.setStickerFolderPath(this, treeUri.toString());
                             updateFolderDisplay();
                         }
                     }
                 });
 
-        // Update folder display
         updateFolderDisplay();
 
         chooseFolderButton.setOnClickListener(v -> {
@@ -79,168 +88,266 @@ public class SettingsActivity extends BaseActivity {
             Toast.makeText(this, "Reset to default folder", Toast.LENGTH_SHORT).show();
         });
 
-        // Theme radio group
         SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         int themeMode = prefs.getInt(KEY_THEME, AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
-        // We will store AMOLED as MODE_NIGHT_YES + 10 (or a custom value), but for AppCompatDelegate it's just night mode. We'll handle Amoled via a custom style in re-create.
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
         
-        if (isAmoled) {
-            themeRadioGroup.check(R.id.theme_amoled);
-        } else {
+        if (isAmoled) themeRadioGroup.check(R.id.theme_amoled);
+        else {
             switch (themeMode) {
-                case AppCompatDelegate.MODE_NIGHT_NO:
-                    themeRadioGroup.check(R.id.theme_light);
-                    break;
-                case AppCompatDelegate.MODE_NIGHT_YES:
-                    themeRadioGroup.check(R.id.theme_dark);
-                    break;
-                default:
-                    themeRadioGroup.check(R.id.theme_system);
-                    break;
+                case AppCompatDelegate.MODE_NIGHT_NO: themeRadioGroup.check(R.id.theme_light); break;
+                case AppCompatDelegate.MODE_NIGHT_YES: themeRadioGroup.check(R.id.theme_dark); break;
+                default: themeRadioGroup.check(R.id.theme_system); break;
             }
         }
 
         themeRadioGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            int mode;
-            boolean setAmoled = false;
+            int mode; boolean setAmoled = false;
+            if (checkedId == R.id.theme_light) mode = AppCompatDelegate.MODE_NIGHT_NO;
+            else if (checkedId == R.id.theme_dark) mode = AppCompatDelegate.MODE_NIGHT_YES;
+            else if (checkedId == R.id.theme_amoled) { mode = AppCompatDelegate.MODE_NIGHT_YES; setAmoled = true; }
+            else mode = AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
             
-            if (checkedId == R.id.theme_light) {
-                mode = AppCompatDelegate.MODE_NIGHT_NO;
-            } else if (checkedId == R.id.theme_dark) {
-                mode = AppCompatDelegate.MODE_NIGHT_YES;
-            } else if (checkedId == R.id.theme_amoled) {
-                mode = AppCompatDelegate.MODE_NIGHT_YES;
-                setAmoled = true;
-            } else {
-                mode = AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
-            }
-            
-            prefs.edit()
-                .putInt(KEY_THEME, mode)
-                .putBoolean("theme_amoled", setAmoled)
-                .apply();
-                
+            prefs.edit().putInt(KEY_THEME, mode).putBoolean("theme_amoled", setAmoled).apply();
             AppCompatDelegate.setDefaultNightMode(mode);
-            // Recreate only this activity — AppCompatDelegate already applied the global
-            // night mode so the rest of the back stack will pick it up on next resume.
             recreate();
         });
 
         // Pack picker switch
         askPackPickerSwitch.setChecked(isAskPackPickerEnabled(this));
         askPackPickerSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                    .edit().putBoolean(KEY_ASK_PACK_PICKER, isChecked).apply();
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_ASK_PACK_PICKER, isChecked).apply();
         });
 
-        // Diagnostics button
-        runDiagnosticsButton.setOnClickListener(v -> runPackDiagnostics());
-
-        // GitHub button
-        githubButton.setOnClickListener(v -> {
-            startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(GITHUB_URL)));
+        // Animations switch
+        enableAnimationsSwitch.setChecked(isAnimationsEnabled(this));
+        enableAnimationsSwitch.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().putBoolean(KEY_ENABLE_ANIMATIONS, isChecked).apply();
         });
 
-        // Donate button — the real currency is kidneys
-        donateButton.setOnClickListener(v -> {
-            android.widget.ImageView memeView = new android.widget.ImageView(this);
-            memeView.setImageResource(R.drawable.kidney_meme);
-            memeView.setAdjustViewBounds(true);
-            int pad = (int) (16 * getResources().getDisplayMetrics().density);
-            memeView.setPadding(pad, pad, pad, 0);
-
-            new AlertDialog.Builder(this)
-                .setTitle("❤️ Donate $69")
-                .setMessage("Send your kidney to Max ❤️")
-                .setPositiveButton("Gladly 💌", (dialog, which) -> {
-                    // Show the meme dialog
-                    android.widget.ImageView memeImg = new android.widget.ImageView(this);
-                    memeImg.setImageResource(R.drawable.kidney_meme);
-                    memeImg.setAdjustViewBounds(true);
-                    int p = (int) (12 * getResources().getDisplayMetrics().density);
-                    memeImg.setPadding(p, p, p, 0);
-
-                    new AlertDialog.Builder(this)
-                        .setTitle("🚑 Sending kidney to Max...")
-                        .setView(memeImg)
-                        .setPositiveButton("You're welcome ❤️", null)
-                        .show();
-                })
-                .setNegativeButton("Maybe later", null)
-                .show();
-        });
+        runDiagnosticsButton.setOnClickListener(v -> showPackSelectorForDiagnostics());
+        githubButton.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(GITHUB_URL))));
+        donateButton.setOnClickListener(v -> showDonateDialog());
     }
 
     private void updateFolderDisplay() {
         String path = WastickerParser.getStickerFolderPath(this);
-        currentFolderText.setText(path.equals(getFilesDir().getAbsolutePath()) ?
-                "Default (internal storage)" : path);
+        currentFolderText.setText(path.equals(getFilesDir().getAbsolutePath()) ? "Default (internal storage)" : path);
     }
 
     public static boolean isAskPackPickerEnabled(Context context) {
-        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_ASK_PACK_PICKER, false);
+        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_ASK_PACK_PICKER, false);
     }
 
-    private void runPackDiagnostics() {
-        StringBuilder report = new StringBuilder();
-        report.append("=== Pack Diagnostics ===\n\n");
-        String folderPath = WastickerParser.getStickerFolderPath(this);
-        report.append("Sticker folder: ").append(folderPath).append("\n\n");
+    public static boolean isAnimationsEnabled(Context context) {
+        return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE).getBoolean(KEY_ENABLE_ANIMATIONS, true);
+    }
 
+    private void showPackSelectorForDiagnostics() {
         try {
             ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(this);
-            report.append("Total packs: ").append(packs.size()).append("\n\n");
+            if (packs.isEmpty()) {
+                Toast.makeText(this, "No packs found to diagnose", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String[] names = new String[packs.size() + 1];
+            names[0] = "[ ALL PACKS ]";
+            for (int i = 0; i < packs.size(); i++) names[i + 1] = packs.get(i).name;
+
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle("Select Pack for Diagnostic")
+                    .setItems(names, (dialog, which) -> {
+                        if (which == 0) runPackDiagnostics(packs);
+                        else {
+                            ArrayList<StickerPack> s = new ArrayList<>();
+                            s.add(packs.get(which - 1));
+                            runPackDiagnostics(s);
+                        }
+                    }).show();
+        } catch (Exception e) { Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_SHORT).show(); }
+    }
+
+    private void runPackDiagnostics(ArrayList<StickerPack> packs) {
+        StringBuilder report = new StringBuilder();
+        report.append("=== Deep Pack Diagnostics ===\n\n");
+        String root = WastickerParser.getStickerFolderPath(this);
+
+        for (StickerPack pack : packs) {
+            report.append("■ PACK: ").append(pack.name).append("\n");
+            File packDir = new File(new File(root), pack.identifier);
+            File trayFile = new File(packDir, pack.trayImageFile);
+            
+            String trayInfo = "⚠ MISSING";
+            if (trayFile.exists()) {
+                android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                opts.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(trayFile.getAbsolutePath(), opts);
+                trayInfo = "(" + opts.outWidth + "x" + opts.outHeight + ", " + Formatter.formatShortFileSize(this, trayFile.length()) + ")";
+            }
+            report.append("  Tray: ").append(pack.trayImageFile).append(" ").append(trayInfo).append("\n");
+
+            if (pack.getStickers() != null) {
+                for (Sticker s : pack.getStickers()) {
+                    File file = new File(packDir, s.imageFileName);
+                    if (file.exists()) {
+                        StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(file);
+                        report.append("    ○ ").append(s.imageFileName).append("\n");
+                        report.append("      ").append(info.width).append("x").append(info.height)
+                              .append("  ").append(Formatter.formatShortFileSize(this, file.length()))
+                              .append(info.isAnimated ? "  [ANIMATED]" : "  [STATIC]").append("\n");
+                        
+                        // Color/Alpha info
+                        report.append("      Color: ").append(info.hasAlpha ? "RGBA" : "RGB");
+                        if (info.hasIcc) report.append(" + ICC");
+                        if (info.hasExif) report.append(" + EXIF");
+                        report.append("\n");
+                        
+                        // Frames/FPS info
+                        if (info.isAnimated) {
+                            report.append("      Frames: ").append(info.frameCount);
+                            if (info.fps > 0) report.append("  Rate: ").append(info.fps).append(" fps");
+                            report.append("\n");
+                        }
+                    } else report.append("    ⚠ ").append(s.imageFileName).append(" MISSING\n");
+                }
+            }
+            report.append("\n");
+        }
+
+        View v = LayoutInflater.from(this).inflate(R.layout.dialog_diagnostics, null);
+        TextView logText = v.findViewById(R.id.diagnostics_report_text);
+        logText.setText(report.toString());
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("Diagnostic Results")
+                .setView(v)
+                .setPositiveButton("Process & Repair", (d, which) -> startRepairProcess(packs))
+                .setNegativeButton("Close", null)
+                .setNeutralButton("Copy", null)
+                .show();
+
+        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cb.setPrimaryClip(android.content.ClipData.newPlainText("diag", report.toString()));
+            Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    private void startRepairProcess(ArrayList<StickerPack> packs) {
+        View v = LayoutInflater.from(this).inflate(R.layout.dialog_diagnostics, null);
+        TextView logText = v.findViewById(R.id.diagnostics_report_text);
+        logText.setText("Initializing deep repair engine...\n");
+        ScrollView sv = (ScrollView) logText.getParent();
+
+        AlertDialog diag = new MaterialAlertDialogBuilder(this)
+                .setTitle("Processing Stickers...")
+                .setView(v).setCancelable(false)
+                .setPositiveButton("Done", (d, w) -> recreate())
+                .setNeutralButton("Copy Log", null)
+                .show();
+
+        Button done = diag.getButton(AlertDialog.BUTTON_POSITIVE);
+        done.setEnabled(false);
+
+        diag.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(view -> {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cb.setPrimaryClip(android.content.ClipData.newPlainText("repair_log", logText.getText().toString()));
+            Toast.makeText(this, "Log copied to clipboard", Toast.LENGTH_SHORT).show();
+        });
+
+        repairExecutor.execute(() -> {
+            int fixedCount = 0;
+            String rootPath = WastickerParser.getStickerFolderPath(this);
 
             for (StickerPack pack : packs) {
-                report.append("--- Pack: ").append(pack.name).append(" ---\n");
-                report.append("  ID: ").append(pack.identifier).append("\n");
-                report.append("  Publisher: ").append(pack.publisher).append("\n");
-                report.append("  Animated: ").append(pack.animatedStickerPack).append("\n");
-                report.append("  Tray: ").append(pack.trayImageFile).append("\n");
+                postLog(logText, sv, "\n■ PROCESSING: " + pack.name);
+                File packDir = new File(new File(rootPath), pack.identifier);
 
-                File trayFile = new File(new File(folderPath, pack.identifier), pack.trayImageFile);
-                if (trayFile.exists()) {
-                    report.append("  Tray size: ").append(Formatter.formatShortFileSize(this, trayFile.length())).append("\n");
-                } else {
-                    report.append("  ⚠ TRAY MISSING\n");
+                // 1. Repair Tray
+                File trayFile = new File(packDir, pack.trayImageFile);
+                boolean trayBad = !trayFile.exists() || trayFile.length() == 0;
+                if (!trayBad) {
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeFile(trayFile.getAbsolutePath(), o);
+                    if (o.outWidth != 96 || o.outHeight != 96) trayBad = true;
                 }
 
+                if (trayBad && pack.getStickers() != null && !pack.getStickers().isEmpty()) {
+                    try {
+                        postLog(logText, sv, "  ⚙ Standardizing Tray Icon (96x96)...");
+                        File src = new File(packDir, pack.getStickers().get(0).imageFileName);
+                        StickerProcessor.processTrayIcon(src, trayFile);
+                        postLog(logText, sv, "    ✓ Fixed Tray.");
+                        fixedCount++;
+                    } catch (Exception e) { postLog(logText, sv, "    ✖ Tray failed: " + e.getMessage()); }
+                }
+
+                // 2. Repair Stickers
                 if (pack.getStickers() != null) {
-                    report.append("  Stickers: ").append(pack.getStickers().size()).append("\n");
-                    for (Sticker sticker : pack.getStickers()) {
-                        File stickerFile = new File(new File(folderPath, pack.identifier), sticker.imageFileName);
-                        if (stickerFile.exists()) {
-                            boolean isAnimated = WastickerParser.isAnimatedWebPPublic(this, pack.identifier, sticker.imageFileName);
-                            report.append("    ").append(sticker.imageFileName)
-                                    .append(" (").append(Formatter.formatShortFileSize(this, stickerFile.length())).append(")")
-                                    .append(isAnimated ? " [animated]" : " [static]");
-                            if (pack.animatedStickerPack != isAnimated) {
-                                report.append(" ⚠ TYPE MISMATCH");
+                    for (Sticker s : pack.getStickers()) {
+                        File f = new File(packDir, s.imageFileName);
+                        if (!f.exists()) continue;
+
+                        StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(f);
+                        boolean needsFix = false;
+                        
+                        if (!info.isAnimated) {
+                            if (info.width != 512 || info.height != 512 || f.length() > 100 * 1024) {
+                                needsFix = true;
                             }
-                            report.append("\n");
                         } else {
-                            report.append("    ").append(sticker.imageFileName).append(" ⚠ MISSING\n");
+                            if (info.width != 512 || info.height != 512) {
+                                postLog(logText, sv, "  ⚠ Animated sticker wrong size (" + info.width + "x" + info.height + "). Resizing animated WebP is limited.");
+                            }
+                            
+                            postLog(logText, sv, "  ⚙ Cleaning Metadata: " + s.imageFileName);
+                            if (StickerProcessor.stripWebPMetadata(f)) {
+                                postLog(logText, sv, "    ✓ Metadata stripped.");
+                                fixedCount++;
+                            } else {
+                                postLog(logText, sv, "    · No metadata found.");
+                            }
+                            
+                            if (f.length() > 500 * 1024) {
+                                postLog(logText, sv, "  ✖ CRITICAL: Animated sticker still over 500KB (" + Formatter.formatShortFileSize(this, f.length()) + ")");
+                            }
+                        }
+
+                        if (needsFix && !info.isAnimated) {
+                            try {
+                                postLog(logText, sv, "  ⚙ Standardizing Static: " + s.imageFileName);
+                                StickerProcessor.processStaticSticker(f, f);
+                                postLog(logText, sv, "    ✓ Fixed (512x512).");
+                                fixedCount++;
+                            } catch (Exception e) {
+                                postLog(logText, sv, "    ✖ Failed: " + e.getMessage());
+                            }
                         }
                     }
                 }
-                report.append("\n");
             }
-        } catch (Exception e) {
-            report.append("Error: ").append(e.getMessage()).append("\n");
-        }
 
-        String reportText = report.toString();
-        new AlertDialog.Builder(this)
-                .setTitle("Pack Diagnostics")
-                .setMessage(reportText)
-                .setPositiveButton(android.R.string.ok, null)
-                .setNeutralButton("Copy", (dialog, which) -> {
-                    android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("diagnostics", reportText));
-                    Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
-                })
-                .show();
+            postLog(logText, sv, "\n=== Processing Complete ===");
+            postLog(logText, sv, "Standardized Operations: " + fixedCount);
+            mainHandler.post(() -> {
+                StickerContentProvider.getInstance().invalidateStickerPackList();
+                done.setEnabled(true);
+                Toast.makeText(this, "Repair complete.", Toast.LENGTH_SHORT).show();
+            });
+        });
+    }
+
+    private void postLog(TextView t, ScrollView s, String m) {
+        mainHandler.post(() -> { t.append(m + "\n"); s.post(() -> s.fullScroll(View.FOCUS_DOWN)); });
+    }
+
+    private void showDonateDialog() {
+        new AlertDialog.Builder(this).setTitle("❤️ Donate").setMessage("Send your kidney to Max ❤️")
+            .setPositiveButton("Gladly 💌", (d, w) -> {
+                android.widget.ImageView iv = new android.widget.ImageView(this);
+                iv.setImageResource(R.drawable.kidney_meme); iv.setAdjustViewBounds(true);
+                new AlertDialog.Builder(this).setTitle("🚑 Sending...").setView(iv).setPositiveButton("Done", null).show();
+            }).setNegativeButton("Later", null).show();
     }
 }

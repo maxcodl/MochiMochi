@@ -15,7 +15,7 @@ import java.util.List;
 
 class Sticker implements Parcelable {
     final String imageFileName;
-    final List<String> emojis;
+    List<String> emojis;
     final String accessibilityText;
     long size;
     String validationError; // transient, set by validator
@@ -47,6 +47,10 @@ class Sticker implements Parcelable {
 
     public void setSize(long size) {
         this.size = size;
+    }
+
+    public void setEmojis(List<String> emojis) {
+        this.emojis = emojis;
     }
 
     @Override

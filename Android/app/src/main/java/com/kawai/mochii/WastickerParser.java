@@ -61,7 +61,7 @@ public class WastickerParser {
                     throw new IOException("No sticker packs found in contents.json");
                 }
             } else {
-                // Fallback for bot-generated .wasticker (has title.txt, author.txt, tray.png, emojis.json)
+                // Fallback for bot-generated .wasticker
                 File titleFile = new File(tempDir, "title.txt");
                 if (!titleFile.exists()) {
                     throw new IOException("Invalid sticker pack: missing both contents.json and title.txt");
@@ -96,7 +96,7 @@ public class WastickerParser {
                 botPack.put("license_agreement_website", "");
                 botPack.put("image_data_version", "1");
                 botPack.put("avoid_cache", false);
-                // Detect animation from the actual WebP files
+                
                 File[] tempFiles = tempDir.listFiles();
                 boolean detectedAnimated = false;
                 if (tempFiles != null) {
@@ -111,9 +111,8 @@ public class WastickerParser {
                 botPack.put("animated_sticker_pack", detectedAnimated);
                 
                 JSONArray stickers = new JSONArray();
-                File[] files = tempDir.listFiles();
-                if (files != null) {
-                    for (File f : files) {
+                if (tempFiles != null) {
+                    for (File f : tempFiles) {
                         if (f.getName().toLowerCase().endsWith(".webp") && !f.getName().equals("tray.webp")) {
                             JSONObject stickerJson = new JSONObject();
                             stickerJson.put("image_file", f.getName());
@@ -132,33 +131,12 @@ public class WastickerParser {
 
             String firstPackIdentifier = null;
 
-            // Read existing master contents.json, seeding from bundled asset if first run
-            File masterContentsFile = new File(stickerDir, "contents.json");
-            JSONObject masterRoot;
-            JSONArray masterPacks;
-            if (masterContentsFile.exists()) {
-                masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
-                masterPacks = masterRoot.optJSONArray("sticker_packs");
-                if (masterPacks == null) masterPacks = new JSONArray();
-            } else {
-                // First import — seed with any bundled packs from assets so they aren't lost
-                masterRoot = new JSONObject();
-                masterRoot.put("android_play_store_link", "");
-                masterRoot.put("ios_app_store_link", "");
+            JSONObject masterRoot = getOrSeedMasterRoot(context);
+            JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+            if (masterPacks == null) {
                 masterPacks = new JSONArray();
-                try (java.io.InputStream assetStream = context.getAssets().open("contents.json")) {
-                    JSONObject bundled = new JSONObject(readAllBytesAsString(assetStream));
-                    JSONArray bundledPacks = bundled.optJSONArray("sticker_packs");
-                    if (bundledPacks != null) {
-                        for (int i = 0; i < bundledPacks.length(); i++) {
-                            masterPacks.put(bundledPacks.getJSONObject(i));
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.d(TAG, "No bundled contents.json to seed from: " + e.getMessage());
-                }
+                masterRoot.put("sticker_packs", masterPacks);
             }
-
 
             for (int p = 0; p < packsArray.length(); p++) {
                 JSONObject packJson = packsArray.getJSONObject(p);
@@ -215,13 +193,32 @@ public class WastickerParser {
                     }
                 }
 
+                // Re-detect animated flag
+                boolean redetectedAnimated = false;
+                if (stickers != null) {
+                    for (int s = 0; s < stickers.length(); s++) {
+                        String imageFile = stickers.getJSONObject(s).optString("image_file", "");
+                        if (!imageFile.isEmpty()) {
+                            File f = new File(packDir, imageFile);
+                            if (f.exists() && isAnimatedWebPFile(f)) {
+                                redetectedAnimated = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                packJson.put("animated_sticker_pack", redetectedAnimated);
+
                 // Add pack to master
                 masterPacks.put(packJson);
             }
 
             // Write updated master contents.json
-            masterRoot.put("sticker_packs", masterPacks);
+            File masterContentsFile = new File(stickerDir, "contents.json");
             writeStringToFile(masterContentsFile, masterRoot.toString(2));
+
+            // Post-import validation: Check for oversized stickers
+            checkForOversizedStickers(context, firstPackIdentifier);
 
             AppLogger.log(TAG, "Successfully imported sticker pack(s)");
             return firstPackIdentifier;
@@ -231,24 +228,38 @@ public class WastickerParser {
         }
     }
 
+    private static JSONObject getOrSeedMasterRoot(Context context) throws IOException, JSONException {
+        File stickerDir = new File(getStickerFolderPath(context));
+        File masterContentsFile = new File(stickerDir, "contents.json");
+        if (masterContentsFile.exists()) {
+            return new JSONObject(readStringFromFile(masterContentsFile));
+        } else {
+            JSONObject masterRoot = new JSONObject();
+            masterRoot.put("android_play_store_link", "");
+            masterRoot.put("ios_app_store_link", "");
+            JSONArray masterPacks = new JSONArray();
+            try (java.io.InputStream assetStream = context.getAssets().open("contents.json")) {
+                JSONObject bundled = new JSONObject(readAllBytesAsString(assetStream));
+                JSONArray bundledPacks = bundled.optJSONArray("sticker_packs");
+                if (bundledPacks != null) {
+                    for (int i = 0; i < bundledPacks.length(); i++) {
+                        masterPacks.put(bundledPacks.getJSONObject(i));
+                    }
+                }
+            } catch (Exception e) {
+                Log.d(TAG, "No bundled contents.json to seed from: " + e.getMessage());
+            }
+            masterRoot.put("sticker_packs", masterPacks);
+            return masterRoot;
+        }
+    }
+
     /**
      * Import a single sticker from a .wst URI.
-     *
-     * .wst can be either:
-     *   - A raw WebP file (renamed to .wst)
-     *   - A ZIP containing one .webp + optional metadata.json
-     *     (keys: "emojis": [...], "title": "...", "author": "...")
-     *
-     * The sticker is added to {@code targetPackId} if supplied and found,
-     * otherwise to the first user pack with fewer than 30 stickers,
-     * otherwise to a freshly created pack.
-     *
-     * @return null on success, error message on failure.
      */
     public static String importSingleSticker(Context context, Uri uri, String targetPackId)
             throws IOException, JSONException {
 
-        // --- Read the .wst file ---
         byte[] webpBytes = null;
         List<String> emojis = new ArrayList<>();
         String title = null;
@@ -257,7 +268,6 @@ public class WastickerParser {
         InputStream firstStream = context.getContentResolver().openInputStream(uri);
         if (firstStream == null) return "Cannot open URI: " + uri;
 
-        // Peek first 4 bytes to detect ZIP (PK\x03\x04)
         byte[] peek = new byte[4];
         int peekRead = firstStream.read(peek);
         firstStream.close();
@@ -288,7 +298,6 @@ public class WastickerParser {
                 }
             }
         } else {
-            // Raw bytes: prepend the 4 peeked bytes
             try (InputStream is = context.getContentResolver().openInputStream(uri)) {
                 if (is == null) return "Cannot open URI: " + uri;
                 byte[] rest = readAllBytes(is);
@@ -303,22 +312,14 @@ public class WastickerParser {
         }
         if (emojis.isEmpty()) emojis.add("\uD83D\uDE00");
 
-        // --- Find or create target pack ---
         File stickerDir = new File(getStickerFolderPath(context));
         stickerDir.mkdirs();
 
-        File masterContentsFile = new File(stickerDir, "contents.json");
-        JSONObject masterRoot;
-        JSONArray masterPacks;
-        if (masterContentsFile.exists()) {
-            masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
-            masterPacks = masterRoot.optJSONArray("sticker_packs");
-            if (masterPacks == null) masterPacks = new JSONArray();
-        } else {
-            masterRoot = new JSONObject();
-            masterRoot.put("android_play_store_link", "");
-            masterRoot.put("ios_app_store_link", "");
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) {
             masterPacks = new JSONArray();
+            masterRoot.put("sticker_packs", masterPacks);
         }
 
         JSONObject targetPack = null;
@@ -367,21 +368,18 @@ public class WastickerParser {
         File packDir = new File(stickerDir, packId);
         packDir.mkdirs();
 
-        // Write WebP sticker file
         String fileName = "sticker_" + System.currentTimeMillis() + ".webp";
-        FileOutputStream stickerFos = new FileOutputStream(new File(packDir, fileName));
-        stickerFos.write(webpBytes);
-        stickerFos.close();
-
-        // Auto-generate tray icon from first sticker if absent
-        File trayFile = new File(packDir, targetPack.optString("tray_image_file", "tray.webp"));
-        if (!trayFile.exists()) {
-            FileOutputStream trayFos = new FileOutputStream(trayFile);
-            trayFos.write(webpBytes);
-            trayFos.close();
+        try (FileOutputStream stickerFos = new FileOutputStream(new File(packDir, fileName))) {
+            stickerFos.write(webpBytes);
         }
 
-        // Add sticker entry to pack JSON
+        File trayFile = new File(packDir, targetPack.optString("tray_image_file", "tray.webp"));
+        if (!trayFile.exists()) {
+            try (FileOutputStream trayFos = new FileOutputStream(trayFile)) {
+                trayFos.write(webpBytes);
+            }
+        }
+
         JSONObject stickerEntry = new JSONObject();
         stickerEntry.put("image_file", fileName);
         JSONArray emojiArray = new JSONArray();
@@ -396,15 +394,13 @@ public class WastickerParser {
         }
         stickers.put(stickerEntry);
 
-        // Save master contents.json
-        masterRoot.put("sticker_packs", masterPacks);
+        File masterContentsFile = new File(stickerDir, "contents.json");
         writeStringToFile(masterContentsFile, masterRoot.toString(2));
 
         AppLogger.log(TAG, "Imported single sticker to pack: " + packId);
         return null; // success
     }
 
-    /** Returns true if the given WebP bytes represent an animated WebP (VP8X with animation flag). */
     private static boolean isAnimatedWebPBytes(byte[] data) {
         if (data == null || data.length < 21) return false;
         if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return false;
@@ -412,13 +408,23 @@ public class WastickerParser {
         if (data[12] == 'V' && data[13] == 'P' && data[14] == '8' && data[15] == 'X') {
             return (data[20] & 0x02) != 0;
         }
+        int limit = Math.min(data.length - 8, 1024);
+        for (int i = 12; i < limit; i++) {
+            if (data[i] == 'V' && data[i+1] == 'P' && data[i+2] == '8' && data[i+3] == 'X') {
+                return (data[i + 8] & 0x02) != 0;
+            }
+        }
+        for (int i = 12; i < limit; i++) {
+            if (data[i] == 'A' && data[i+1] == 'N' && data[i+2] == 'I' && data[i+3] == 'M') {
+                return true;
+            }
+        }
         return false;
     }
 
-    /** Returns true if the given WebP File is animated. */
     private static boolean isAnimatedWebPFile(File file) {
         try (FileInputStream fis = new FileInputStream(file)) {
-            byte[] header = new byte[21];
+            byte[] header = new byte[1024];
             int read = fis.read(header);
             return read >= 21 && isAnimatedWebPBytes(header);
         } catch (Exception e) {
@@ -426,7 +432,6 @@ public class WastickerParser {
         }
     }
 
-    /** Read all bytes from an InputStream without closing it. */
     private static byte[] readAllBytes(InputStream is) throws IOException {
         byte[] buffer = new byte[8192];
         int n;
@@ -435,16 +440,9 @@ public class WastickerParser {
         return bos.toByteArray();
     }
 
-    /**
-     * Delete a sticker pack by identifier — removes pack folder and updates contents.json.
-     */
     public static void deleteStickerPack(Context context, String identifier) throws IOException, JSONException {
         File stickerDir = new File(getStickerFolderPath(context));
-        File masterContentsFile = new File(stickerDir, "contents.json");
-
-        if (!masterContentsFile.exists()) return;
-
-        JSONObject masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
         JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
         if (masterPacks == null) return;
 
@@ -457,26 +455,110 @@ public class WastickerParser {
         }
 
         masterRoot.put("sticker_packs", updatedPacks);
+        File masterContentsFile = new File(stickerDir, "contents.json");
         writeStringToFile(masterContentsFile, masterRoot.toString(2));
 
-        // Delete the pack folder
         File packDir = new File(stickerDir, identifier);
         if (packDir.exists()) {
             deleteRecursive(packDir);
         }
 
+        StickerContentProvider provider = StickerContentProvider.getInstance();
+        if (provider != null) provider.invalidateStickerPackList();
+
         AppLogger.log(TAG, "Deleted sticker pack: " + identifier);
     }
 
-    /**
-     * Add a single WebP sticker to an existing pack.
-     */
+    public static void updateStickerEmojis(Context context, String packIdentifier, String stickerFileName, List<String> emojis) throws IOException, JSONException {
+        File stickerDir = new File(getStickerFolderPath(context));
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) return;
+
+        boolean modified = false;
+        for (int i = 0; i < masterPacks.length(); i++) {
+            JSONObject pack = masterPacks.getJSONObject(i);
+            if (pack.optString("identifier").equals(packIdentifier)) {
+                JSONArray stickers = pack.optJSONArray("stickers");
+                if (stickers != null) {
+                    for (int j = 0; j < stickers.length(); j++) {
+                        JSONObject sticker = stickers.getJSONObject(j);
+                        if (sticker.optString("image_file").equals(stickerFileName)) {
+                            JSONArray emojiArray = new JSONArray();
+                            for (String e : emojis) emojiArray.put(e);
+                            sticker.put("emojis", emojiArray);
+                            modified = true;
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
+        if (modified) {
+            File masterContentsFile = new File(stickerDir, "contents.json");
+            writeStringToFile(masterContentsFile, masterRoot.toString(2));
+            StickerContentProvider provider = StickerContentProvider.getInstance();
+            if (provider != null) provider.invalidateStickerPackList();
+            AppLogger.log(TAG, "Updated emojis for sticker " + stickerFileName + " in pack " + packIdentifier);
+        }
+    }
+
+    public static void deleteSticker(Context context, String packIdentifier, String stickerFileName) throws IOException, JSONException {
+        File stickerDir = new File(getStickerFolderPath(context));
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) return;
+
+        boolean modified = false;
+        for (int i = 0; i < masterPacks.length(); i++) {
+            JSONObject pack = masterPacks.getJSONObject(i);
+            if (pack.optString("identifier").equals(packIdentifier)) {
+                JSONArray stickers = pack.optJSONArray("stickers");
+                if (stickers != null) {
+                    JSONArray updatedStickers = new JSONArray();
+                    for (int j = 0; j < stickers.length(); j++) {
+                        JSONObject sticker = stickers.getJSONObject(j);
+                        if (!sticker.optString("image_file").equals(stickerFileName)) {
+                            updatedStickers.put(sticker);
+                        }
+                    }
+                    pack.put("stickers", updatedStickers);
+
+                    File packDir = new File(stickerDir, packIdentifier);
+                    boolean isAnimated = false;
+                    for (int j = 0; j < updatedStickers.length(); j++) {
+                        String fn = updatedStickers.getJSONObject(j).optString("image_file", "");
+                        if (!fn.isEmpty() && isAnimatedWebPFile(new File(packDir, fn))) {
+                            isAnimated = true;
+                            break;
+                        }
+                    }
+                    pack.put("animated_sticker_pack", isAnimated);
+                    modified = true;
+                }
+
+                File stickerFile = new File(new File(stickerDir, packIdentifier), stickerFileName);
+                if (stickerFile.exists()) {
+                    stickerFile.delete();
+                }
+                break;
+            }
+        }
+
+        if (modified) {
+            File masterContentsFile = new File(stickerDir, "contents.json");
+            writeStringToFile(masterContentsFile, masterRoot.toString(2));
+            StickerContentProvider provider = StickerContentProvider.getInstance();
+            if (provider != null) provider.invalidateStickerPackList();
+            AppLogger.log(TAG, "Deleted sticker " + stickerFileName + " from pack " + packIdentifier);
+        }
+    }
+
     public static void addWebpStickerToPack(Context context, String identifier, File webpFile) throws IOException, JSONException {
         File stickerDir = new File(getStickerFolderPath(context));
-        File masterContentsFile = new File(stickerDir, "contents.json");
-        if (!masterContentsFile.exists()) throw new IOException("No contents.json found");
-
-        JSONObject masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
         JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
         if (masterPacks == null) throw new IOException("No sticker packs found");
 
@@ -486,11 +568,9 @@ public class WastickerParser {
                 File packDir = new File(stickerDir, identifier);
                 packDir.mkdirs();
 
-                // Copy the webp file
                 String fileName = webpFile.getName();
                 copyFile(webpFile, new File(packDir, fileName));
 
-                // Add to stickers array
                 JSONArray stickers = pack.optJSONArray("stickers");
                 if (stickers == null) stickers = new JSONArray();
                 JSONObject stickerJson = new JSONObject();
@@ -498,17 +578,24 @@ public class WastickerParser {
                 stickerJson.put("emojis", new JSONArray().put("\uD83D\uDE00"));
                 stickers.put(stickerJson);
                 pack.put("stickers", stickers);
+
+                boolean isAnimated = false;
+                for (int j = 0; j < stickers.length(); j++) {
+                    String fn = stickers.getJSONObject(j).optString("image_file", "");
+                    if (!fn.isEmpty() && isAnimatedWebPFile(new File(packDir, fn))) {
+                        isAnimated = true;
+                        break;
+                    }
+                }
+                pack.put("animated_sticker_pack", isAnimated);
                 break;
             }
         }
 
-        masterRoot.put("sticker_packs", masterPacks);
+        File masterContentsFile = new File(stickerDir, "contents.json");
         writeStringToFile(masterContentsFile, masterRoot.toString(2));
     }
 
-    /**
-     * Create a new pack with a single sticker.
-     */
     public static String createPackWithSticker(Context context, String title, String author, File webpFile) throws IOException, JSONException {
         File stickerDir = new File(getStickerFolderPath(context));
         if (!stickerDir.exists()) stickerDir.mkdirs();
@@ -517,16 +604,13 @@ public class WastickerParser {
         File packDir = new File(stickerDir, identifier);
         packDir.mkdirs();
 
-        // Copy webp as sticker
         String fileName = webpFile.getName();
         File destSticker = new File(packDir, fileName);
         copyFile(webpFile, destSticker);
 
-        // Use the sticker as tray icon too (will be a larger image, but functional)
         String trayFileName = "tray_" + fileName;
         copyFile(webpFile, new File(packDir, trayFileName));
 
-        // Build pack JSON
         JSONObject packJson = new JSONObject();
         packJson.put("identifier", identifier);
         packJson.put("name", title);
@@ -547,58 +631,59 @@ public class WastickerParser {
         stickers.put(stickerJson);
         packJson.put("stickers", stickers);
 
-        // Merge into master contents.json
-        File masterContentsFile = new File(stickerDir, "contents.json");
-        JSONObject masterRoot;
-        JSONArray masterPacks;
-        if (masterContentsFile.exists()) {
-            masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
-            masterPacks = masterRoot.optJSONArray("sticker_packs");
-            if (masterPacks == null) masterPacks = new JSONArray();
-        } else {
-            masterRoot = new JSONObject();
-            masterRoot.put("android_play_store_link", "");
-            masterRoot.put("ios_app_store_link", "");
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) {
             masterPacks = new JSONArray();
+            masterRoot.put("sticker_packs", masterPacks);
         }
 
         masterPacks.put(packJson);
-        masterRoot.put("sticker_packs", masterPacks);
+        File masterContentsFile = new File(stickerDir, "contents.json");
         writeStringToFile(masterContentsFile, masterRoot.toString(2));
 
         AppLogger.log(TAG, "Created new pack: " + identifier + " with sticker: " + fileName);
         return identifier;
     }
 
-    /**
-     * Full save of an edited or new pack.
-     */
     public static void savePack(Context context, String packName, String author, String identifier,
                                  List<EditStickerAdapter.StickerItem> stickerItems, Uri trayUri) throws IOException, JSONException {
         File stickerDir = new File(getStickerFolderPath(context));
         File packDir = new File(stickerDir, identifier);
         packDir.mkdirs();
 
-        // Handle tray icon
         String trayFileName = "tray.webp";
         if (trayUri != null) {
             File trayFile = new File(packDir, trayFileName);
-            copyUriToFile(context, trayUri, trayFile);
+            StickerProcessor.processTrayIcon(context, trayUri, trayFile);
+        } else {
+            File trayFile = new File(packDir, trayFileName);
+            if (!trayFile.exists() && !stickerItems.isEmpty()) {
+                EditStickerAdapter.StickerItem first = stickerItems.get(0);
+                if (first.newUri != null) {
+                    StickerProcessor.processTrayIcon(context, first.newUri, trayFile);
+                } else if (first.fileName != null) {
+                    Uri existingUri = Uri.fromFile(new File(packDir, first.fileName));
+                    StickerProcessor.processTrayIcon(context, existingUri, trayFile);
+                }
+            }
         }
 
-        // Build stickers array
         JSONArray stickersArray = new JSONArray();
+        List<String> preservedFiles = new ArrayList<>();
+        if (trayFileName != null) preservedFiles.add(trayFileName);
+
         for (int i = 0; i < stickerItems.size(); i++) {
             EditStickerAdapter.StickerItem item = stickerItems.get(i);
             String fileName;
             if (item.newUri != null) {
-                // New sticker — copy from URI
-                fileName = "sticker_" + i + ".webp";
+                fileName = "sticker_" + System.currentTimeMillis() + "_" + i + ".webp";
                 File destFile = new File(packDir, fileName);
-                copyUriToFile(context, item.newUri, destFile);
+                StickerProcessor.processStaticSticker(context, item.newUri, destFile);
             } else {
                 fileName = item.fileName;
             }
+            preservedFiles.add(fileName);
 
             JSONObject stickerJson = new JSONObject();
             stickerJson.put("image_file", fileName);
@@ -610,26 +695,36 @@ public class WastickerParser {
             }
             if (emojis.length() == 0) emojis.put("\uD83D\uDE00");
             stickerJson.put("emojis", emojis);
+            stickerJson.put("accessibility_text", "");
             stickersArray.put(stickerJson);
         }
 
-        // Update master contents.json
-        File masterContentsFile = new File(stickerDir, "contents.json");
-        JSONObject masterRoot;
-        JSONArray masterPacks;
-        if (masterContentsFile.exists()) {
-            masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
-            masterPacks = masterRoot.optJSONArray("sticker_packs");
-            if (masterPacks == null) masterPacks = new JSONArray();
-        } else {
-            masterRoot = new JSONObject();
-            masterRoot.put("android_play_store_link", "");
-            masterRoot.put("ios_app_store_link", "");
-            masterPacks = new JSONArray();
+        File[] files = packDir.listFiles();
+        if (files != null) {
+            for (File f : files) {
+                if (!preservedFiles.contains(f.getName()) && f.getName().endsWith(".webp")) {
+                    f.delete();
+                }
+            }
         }
 
-        // Find existing pack or create new one
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) {
+            masterPacks = new JSONArray();
+            masterRoot.put("sticker_packs", masterPacks);
+        }
+
         boolean found = false;
+        boolean isAnimated = false;
+        for (int j = 0; j < stickersArray.length(); j++) {
+            String fn = stickersArray.getJSONObject(j).optString("image_file", "");
+            if (!fn.isEmpty() && isAnimatedWebPFile(new File(packDir, fn))) {
+                isAnimated = true;
+                break;
+            }
+        }
+
         for (int i = 0; i < masterPacks.length(); i++) {
             JSONObject pack = masterPacks.getJSONObject(i);
             if (pack.optString("identifier").equals(identifier)) {
@@ -637,22 +732,13 @@ public class WastickerParser {
                 pack.put("publisher", author);
                 pack.put("tray_image_file", trayFileName);
                 pack.put("stickers", stickersArray);
+                pack.put("animated_sticker_pack", isAnimated);
                 found = true;
                 break;
             }
         }
+        
         if (!found) {
-            // Detect animated flag from any sticker already written to packDir
-            boolean isAnimated = false;
-            File[] writtenFiles = packDir.listFiles();
-            if (writtenFiles != null) {
-                for (File f : writtenFiles) {
-                    if (f.getName().toLowerCase().endsWith(".webp") && !f.getName().startsWith("tray") && isAnimatedWebPFile(f)) {
-                        isAnimated = true;
-                        break;
-                    }
-                }
-            }
             JSONObject packJson = new JSONObject();
             packJson.put("identifier", identifier);
             packJson.put("name", packName);
@@ -669,54 +755,97 @@ public class WastickerParser {
             masterPacks.put(packJson);
         }
 
-        masterRoot.put("sticker_packs", masterPacks);
+        File masterContentsFile = new File(stickerDir, "contents.json");
         writeStringToFile(masterContentsFile, masterRoot.toString(2));
+        
+        StickerContentProvider provider = StickerContentProvider.getInstance();
+        if (provider != null) provider.invalidateStickerPackList();
+        
         AppLogger.log(TAG, "Saved pack: " + identifier);
     }
 
-    /**
-     * Check if a WebP file is animated by reading the RIFF header.
-     */
     public static boolean isAnimatedWebPPublic(Context context, String identifier, String filename) {
         try {
             File stickerDir = new File(getStickerFolderPath(context));
             File file = new File(new File(stickerDir, identifier), filename);
             if (!file.exists()) return false;
-            FileInputStream fis = new FileInputStream(file);
-            byte[] header = new byte[20];
-            int read = fis.read(header);
-            fis.close();
-            if (read < 16) return false;
-            // Check for RIFF header
-            if (header[0] != 'R' || header[1] != 'I' || header[2] != 'F' || header[3] != 'F') return false;
-            // Check for WEBP
-            if (header[8] != 'W' || header[9] != 'E' || header[10] != 'B' || header[11] != 'P') return false;
-            // Check for VP8X (extended) with animation flag
-            if (header[12] == 'V' && header[13] == 'P' && header[14] == '8' && header[15] == 'X') {
-                if (read >= 21) {
-                    return (header[20] & 0x02) != 0; // Animation flag
-                }
-            }
-            return false;
+            return isAnimatedWebPFile(file);
         } catch (Exception e) {
             return false;
         }
     }
 
-    /**
-     * Shrink a WebP file to fit WhatsApp's size limits.
-     */
     public static void shrinkWebP(File file) {
-        // WebP compression requires native libraries — for now just log a warning
         long size = file.length();
         if (size > 500 * 1024) {
             AppLogger.log(TAG, "WARNING: " + file.getName() + " exceeds 500KB limit (" + size + " bytes)");
         }
     }
 
-    /**
-     * Get the sticker folder path. Returns custom path from SharedPrefs or default filesDir.
-     */
+    private static void checkForOversizedStickers(Context context, String packIdentifier) {
+        try {
+            File stickerDir = new File(getStickerFolderPath(context));
+            File masterContentsFile = new File(stickerDir, "contents.json");
+            if (!masterContentsFile.exists()) return;
+
+            JSONObject masterRoot = new JSONObject(readStringFromFile(masterContentsFile));
+            JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+            if (masterPacks == null) return;
+
+            for (int i = 0; i < masterPacks.length(); i++) {
+                JSONObject pack = masterPacks.getJSONObject(i);
+                String identifier = pack.optString("identifier", "");
+                if (!identifier.equals(packIdentifier)) continue;
+
+                boolean isAnimated = pack.optBoolean("animated_sticker_pack", false);
+                JSONArray stickers = pack.optJSONArray("stickers");
+                if (stickers == null) continue;
+
+                int oversizedCount = 0;
+                long maxSize = 0;
+                String maxSizeFile = "";
+
+                for (int s = 0; s < stickers.length(); s++) {
+                    JSONObject sticker = stickers.getJSONObject(s);
+                    String imageFile = sticker.optString("image_file", "");
+                    if (imageFile.isEmpty()) continue;
+
+                    File stickerFile = new File(new File(stickerDir, identifier), imageFile);
+                    if (!stickerFile.exists()) continue;
+
+                    long size = stickerFile.length();
+                    long limitBytes = isAnimated ? 500 * 1024 : 100 * 1024;
+
+                    if (size > limitBytes) {
+                        oversizedCount++;
+                        if (size > maxSize) {
+                            maxSize = size;
+                            maxSizeFile = imageFile;
+                        }
+                        Log.w(TAG, String.format(
+                            "WARNING: Oversized %s sticker detected: %s (%.1f KB, limit: %d KB).",
+                            isAnimated ? "animated" : "static",
+                            imageFile,
+                            size / 1024.0,
+                            limitBytes / 1024
+                        ));
+                    }
+                }
+
+                if (oversizedCount > 0) {
+                    Log.e(TAG, String.format(
+                        "PACK VALIDATION FAILED: Pack '%s' contains %d oversized sticker(s).",
+                        pack.optString("name", identifier),
+                        oversizedCount
+                    ));
+                }
+                break;
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error checking for oversized stickers", e);
+        }
+    }
+
     public static String getStickerFolderPath(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         String customPath = prefs.getString(KEY_STICKER_FOLDER, null);
@@ -735,16 +864,14 @@ public class WastickerParser {
         }
     }
 
-    // ---- Utility methods ----
-
     public static String readStringFromFile(File file) throws IOException {
         StringBuilder sb = new StringBuilder();
-        BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file)));
-        String line;
-        while ((line = reader.readLine()) != null) {
-            sb.append(line).append("\n");
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file)))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
         }
-        reader.close();
         return sb.toString();
     }
 
@@ -754,34 +881,32 @@ public class WastickerParser {
     }
 
     private static void writeStringToFile(File file, String content) throws IOException {
-        FileOutputStream fos = new FileOutputStream(file);
-        fos.write(content.getBytes("UTF-8"));
-        fos.close();
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(content.getBytes("UTF-8"));
+        }
     }
 
     private static void copyFile(File src, File dst) throws IOException {
-        FileInputStream fis = new FileInputStream(src);
-        FileOutputStream fos = new FileOutputStream(dst);
-        byte[] buffer = new byte[8192];
-        int len;
-        while ((len = fis.read(buffer)) > 0) {
-            fos.write(buffer, 0, len);
+        try (FileInputStream fis = new FileInputStream(src);
+             FileOutputStream fos = new FileOutputStream(dst)) {
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = fis.read(buffer)) > 0) {
+                fos.write(buffer, 0, len);
+            }
         }
-        fos.close();
-        fis.close();
     }
 
     private static void copyUriToFile(Context context, Uri uri, File dst) throws IOException {
-        InputStream is = context.getContentResolver().openInputStream(uri);
-        if (is == null) throw new IOException("Cannot open URI: " + uri);
-        FileOutputStream fos = new FileOutputStream(dst);
-        byte[] buffer = new byte[8192];
-        int len;
-        while ((len = is.read(buffer)) > 0) {
-            fos.write(buffer, 0, len);
+        try (InputStream is = context.getContentResolver().openInputStream(uri);
+             FileOutputStream fos = new FileOutputStream(dst)) {
+            if (is == null) throw new IOException("Cannot open URI: " + uri);
+            byte[] buffer = new byte[8192];
+            int len;
+            while ((len = is.read(buffer)) > 0) {
+                fos.write(buffer, 0, len);
+            }
         }
-        fos.close();
-        is.close();
     }
 
     private static void unzip(InputStream is, File destDir) throws IOException {
@@ -793,13 +918,13 @@ public class WastickerParser {
                 file.mkdirs();
             } else {
                 file.getParentFile().mkdirs();
-                BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file));
-                byte[] buffer = new byte[8192];
-                int len;
-                while ((len = zis.read(buffer)) > 0) {
-                    bos.write(buffer, 0, len);
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file))) {
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = zis.read(buffer)) > 0) {
+                        bos.write(buffer, 0, len);
+                    }
                 }
-                bos.close();
             }
             zis.closeEntry();
         }

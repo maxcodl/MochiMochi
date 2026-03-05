@@ -11,13 +11,20 @@ package com.kawai.mochii;
 import android.app.Application;
 
 import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.imagepipeline.core.ImagePipelineConfig;
 
 public class StickerApplication extends Application {
 
     @Override
     public void onCreate() {
         super.onCreate();
-        Fresco.initialize(this);
+        
+        // Configure Fresco for better performance with animated stickers
+        ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
+                .setDownsampleEnabled(true) // Crucial for performance: scales images at decode time
+                .setDiskCacheEnabled(true)
+                .build();
+        Fresco.initialize(this, config);
 
         // Apply the saved night mode globally (light / dark / system).
         // DynamicColors (Monet) is applied per-activity in BaseActivity.onCreate()

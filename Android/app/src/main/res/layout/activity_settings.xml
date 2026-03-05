@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- RECONSTRUCTED from SettingsActivity.java field references.
-     The original file was replaced by a stub. This is the full version. -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="?attr/colorSurface">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -24,11 +24,11 @@
             android:id="@+id/current_folder_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Default (internal storage)"
             android:textSize="14sp"
             android:padding="12dp"
             android:background="?attr/colorSurfaceVariant"
-            android:layout_marginBottom="8dp"/>
+            android:layout_marginBottom="8dp"
+            tools:text="/storage/emulated/0/Download/Stickers" />
 
         <Button
             android:id="@+id/choose_folder_button"
@@ -86,6 +86,23 @@
                 android:checked="true"/>
         </RadioGroup>
 
+        <!-- Animation Toggle Section -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Performance"
+            android:textSize="12sp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:layout_marginBottom="8dp"/>
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/enable_animations_switch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Enable Stickers Animation"
+            android:layout_marginBottom="24dp"
+            tools:checked="true" />
+
         <!-- Import Behaviour -->
         <TextView
             android:layout_width="match_parent"
@@ -100,7 +117,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Ask which pack to add to"
-            android:layout_marginBottom="24dp"/>
+            android:layout_marginBottom="24dp"
+            tools:checked="false" />
 
         <!-- Diagnostics Section -->
         <TextView

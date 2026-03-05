@@ -120,7 +120,12 @@ class StickerPackValidator {
             throw new IllegalStateException("sticker pack sticker count should be between 3 to 30 inclusive, it currently has " + stickers.size() + ", sticker pack identifier: " + stickerPack.identifier);
         }
         for (final Sticker sticker : stickers) {
-            validateSticker(context, stickerPack.identifier, sticker, stickerPack.animatedStickerPack);
+            try {
+                validateSticker(context, stickerPack.identifier, sticker, stickerPack.animatedStickerPack);
+                sticker.validationError = null; // clear any previous error
+            } catch (IllegalStateException e) {
+                sticker.validationError = e.getMessage();
+            }
         }
     }
 

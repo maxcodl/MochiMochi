@@ -2,18 +2,28 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Base application theme — Material3 DayNight + Monet -->
-    <style name="AppTheme" parent="Theme.Material3.DayNight">
+    <style name="AppTheme" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- DynamicColors.applyToActivitiesIfAvailable() in StickerApplication handles Monet -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <!-- Makes status bar icons dark when in light mode -->
         <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
         <!-- Toolbar/menu icon tint — use on-surface color, not primary -->
         <item name="colorControlNormal">?attr/colorOnSurface</item>
+
+        <!-- Smooth Transitions -->
+        <item name="android:windowAnimationStyle">@style/WindowAnimations</item>
+    </style>
+
+    <style name="WindowAnimations">
+        <item name="android:activityOpenEnterAnimation">@anim/slide_in_right</item>
+        <item name="android:activityOpenExitAnimation">@anim/slide_out_left</item>
+        <item name="android:activityCloseEnterAnimation">@anim/slide_in_left</item>
+        <item name="android:activityCloseExitAnimation">@anim/slide_out_right</item>
     </style>
 
     <!-- AMOLED Dark Theme: Monet accent + pitch-black backgrounds -->
     <!-- DynamicColors is applied on top of this in BaseActivity -->
-    <style name="AppTheme.Amoled" parent="Theme.Material3.DayNight">
+    <style name="AppTheme.Amoled" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowBackground">@color/amoled_background</item>
         <item name="android:colorBackground">@color/amoled_background</item>
         <item name="colorSurface">@color/amoled_background</item>
@@ -22,6 +32,7 @@
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
         <item name="colorControlNormal">?attr/colorOnSurface</item>
+        <item name="android:windowAnimationStyle">@style/WindowAnimations</item>
     </style>
 
     <!-- Applied AFTER DynamicColors to restore black surfaces in AMOLED mode.
@@ -38,8 +49,6 @@
         <item name="colorSurfaceContainerLowest">@color/amoled_background</item>
         <item name="android:navigationBarColor">@color/amoled_background</item>
     </style>
-
-
 
     <!-- Used by the "Add to WhatsApp" button text -->
     <style name="StickerPreviewButtonText" parent="Widget.MaterialComponents.Button.TextButton">

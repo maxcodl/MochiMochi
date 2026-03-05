@@ -12,14 +12,9 @@ import android.util.JsonReader;
 
 import androidx.annotation.NonNull;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -56,13 +51,11 @@ class ContentFileParser {
                 }
                 reader.endArray();
             } else {
-                throw new IllegalStateException("unknown field in json: " + key);
+                reader.skipValue();
             }
         }
         reader.endObject();
-        if (stickerPackList.isEmpty()) {
-            throw new IllegalStateException("sticker pack list cannot be empty");
-        }
+        
         for (StickerPack stickerPack : stickerPackList) {
             stickerPack.setAndroidPlayStoreLink(androidPlayStoreLink);
             stickerPack.setIosAppStoreLink(iosAppStoreLink);
@@ -143,7 +136,7 @@ class ContentFileParser {
         if (stickerList == null || stickerList.isEmpty()) {
             throw new IllegalStateException("sticker list is empty");
         }
-        if (identifier == null || identifier.contains("..") || identifier.contains("/")) {
+        if (identifier.contains("..") || identifier.contains("/")) {
             throw new IllegalStateException("identifier should not contain .. or / to prevent directory traversal");
         }
         if (TextUtils.isEmpty(imageDataVersion)) {
@@ -181,7 +174,7 @@ class ContentFileParser {
                 } else if (FIELD_STICKER_ACCESSIBILITY_TEXT.equals(key)) {
                     accessibilityText = reader.nextString();
                 } else {
-                    throw new IllegalStateException("unknown field in json: " + key);
+                    reader.skipValue();
                 }
             }
             reader.endObject();

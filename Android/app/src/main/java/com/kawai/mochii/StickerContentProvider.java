@@ -20,6 +20,7 @@ import android.database.MatrixCursor;
 import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Log;
+import android.webkit.MimeTypeMap;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -63,7 +64,7 @@ public class StickerContentProvider extends ContentProvider {
      * Do not change the values in the UriMatcher because otherwise, WhatsApp will not be able to fetch the stickers from the ContentProvider.
      */
     private static final UriMatcher MATCHER = new UriMatcher(UriMatcher.NO_MATCH);
-    private static final String METADATA = "metadata";
+    static final String METADATA = "metadata";
     private static final int METADATA_CODE = 1;
 
     private static final int METADATA_CODE_FOR_SINGLE_PACK = 2;
@@ -143,16 +144,29 @@ public class StickerContentProvider extends ContentProvider {
             case STICKERS_CODE:
                 return "vnd.android.cursor.dir/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + STICKERS;
             case STICKERS_ASSET_CODE:
-                return "image/webp";
             case STICKER_PACK_TRAY_ICON_CODE:
-                return "image/png";
+                return getMimeType(uri);
             default:
                 throw new IllegalArgumentException("Unknown URI: " + uri);
         }
     }
 
+    private String getMimeType(Uri uri) {
+        String lastSegment = uri.getLastPathSegment();
+        if (lastSegment == null) return "image/webp";
+        
+        String extension = MimeTypeMap.getFileExtensionFromUrl(lastSegment);
+        if (TextUtils.isEmpty(extension)) {
+            int lastDot = lastSegment.lastIndexOf('.');
+            if (lastDot != -1) extension = lastSegment.substring(lastDot + 1);
+        }
+        
+        if ("png".equalsIgnoreCase(extension)) return "image/png";
+        return "image/webp"; // Default to webp as per WhatsApp requirements for stickers
+    }
+
     private synchronized void readContentFile(@NonNull Context context) {
-        // Prefer user-imported contents.json in filesDir over the bundled asset
+        // Prefer user-imported contents.json in filesDir over the bundled asset.
         File userContents = new File(WastickerParser.getStickerFolderPath(context), CONTENT_FILE_NAME);
         if (userContents.exists()) {
             try (InputStream fis = new FileInputStream(userContents)) {
@@ -163,10 +177,11 @@ public class StickerContentProvider extends ContentProvider {
                         "Failed to read user contents.json, falling back to assets", e);
             }
         }
+        
         try (InputStream contentsInputStream = context.getAssets().open(CONTENT_FILE_NAME)) {
             stickerPackList = ContentFileParser.parseStickerPacks(contentsInputStream);
         } catch (IOException | IllegalStateException e) {
-            throw new RuntimeException(CONTENT_FILE_NAME + " file has some issues: " + e.getMessage(), e);
+            stickerPackList = new ArrayList<>();
         }
     }
 
@@ -288,6 +303,7 @@ public class StickerContentProvider extends ContentProvider {
                     new File(WastickerParser.getStickerFolderPath(Objects.requireNonNull(getContext())), identifier),
                     fileName);
             if (userFile.exists()) {
+                // Serve the file even if it's oversized to allow WhatsApp to handle the specific error
                 return new AssetFileDescriptor(
                         android.os.ParcelFileDescriptor.open(userFile,
                                 android.os.ParcelFileDescriptor.MODE_READ_ONLY),

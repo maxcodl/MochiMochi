@@ -8,7 +8,11 @@
 
 package com.kawai.mochii;
 
+import android.graphics.RenderEffect;
+import android.graphics.Shader;
+import android.graphics.drawable.Animatable;
 import android.net.Uri;
+import android.os.Build;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -19,6 +23,12 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.facebook.drawee.backends.pipeline.Fresco;
 import com.facebook.drawee.interfaces.DraweeController;
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imagepipeline.request.ImageRequest;
+import com.facebook.imagepipeline.request.ImageRequestBuilder;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewViewHolder> {
 
@@ -37,8 +47,6 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
     private final LayoutInflater layoutInflater;
     private RecyclerView recyclerView;
     private View clickedStickerPreview;
-    float expandedViewLeftX;
-    float expandedViewTopY;
 
     StickerPreviewAdapter(
             @NonNull final LayoutInflater layoutInflater,
@@ -75,13 +83,35 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
     public void onBindViewHolder(@NonNull final StickerPreviewViewHolder stickerPreviewViewHolder, final int i) {
         Sticker sticker = stickerPack.getStickers().get(i);
         stickerPreviewViewHolder.stickerPreviewView.setImageResource(errorResource);
-        stickerPreviewViewHolder.stickerPreviewView.setImageURI(StickerPackLoader.getStickerAssetUri(stickerPack.identifier, sticker.imageFileName));
+        
+        Uri uri = StickerPackLoader.getStickerAssetUri(stickerPack.identifier, sticker.imageFileName);
+        boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(stickerPreviewViewHolder.stickerPreviewView.getContext());
+
+        // PERFORMANCE: Resize image to cell size for static stickers.
+        // We use cellSize directly to maintain high quality in the grid.
+        ImageRequest request = ImageRequestBuilder.newBuilderWithSource(uri)
+                .setResizeOptions(new ResizeOptions(cellSize, cellSize))
+                .build();
+
+        DraweeController controller = Fresco.newDraweeControllerBuilder()
+                .setImageRequest(request)
+                .setAutoPlayAnimations(animationsEnabled)
+                .setOldController(stickerPreviewViewHolder.stickerPreviewView.getController())
+                .build();
+        stickerPreviewViewHolder.stickerPreviewView.setController(controller);
+
         stickerPreviewViewHolder.stickerPreviewView.setOnClickListener(v -> expandPreview(i, stickerPreviewViewHolder.stickerPreviewView));
         
         android.widget.ImageView warningIcon = stickerPreviewViewHolder.itemView.findViewById(R.id.sticker_warning);
         if (warningIcon != null) {
             warningIcon.setVisibility(sticker.validationError != null ? View.VISIBLE : View.GONE);
         }
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull StickerPreviewViewHolder holder) {
+        super.onViewRecycled(holder);
+        holder.stickerPreviewView.setController(null);
     }
 
     @Override
@@ -109,59 +139,13 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
                 }
             };
 
-    private void positionExpandedStickerPreview(int selectedPosition) {
-        if (expandedStickerPreview != null) {
-            // Calculate the view's center (x, y), then use expandedStickerPreview's height and
-            // width to
-            // figure out what where to position it.
-            final ViewGroup.MarginLayoutParams recyclerViewLayoutParams =
-                    ((ViewGroup.MarginLayoutParams) recyclerView.getLayoutParams());
-            final int recyclerViewLeftMargin = recyclerViewLayoutParams.leftMargin;
-            final int recyclerViewRightMargin = recyclerViewLayoutParams.rightMargin;
-            final int recyclerViewWidth = recyclerView.getWidth();
-            final int recyclerViewHeight = recyclerView.getHeight();
+    private void positionExpandedStickerPreview() {
+        if (expandedStickerPreview != null && recyclerView != null) {
+            float centerX = recyclerView.getWidth() / 2f;
+            float centerY = recyclerView.getHeight() / 2f;
 
-            final StickerPreviewViewHolder clickedViewHolder =
-                    (StickerPreviewViewHolder)
-                            recyclerView.findViewHolderForAdapterPosition(selectedPosition);
-            if (clickedViewHolder == null) {
-                hideExpandedStickerPreview();
-                return;
-            }
-            clickedStickerPreview = clickedViewHolder.itemView;
-            final float clickedViewCenterX =
-                    clickedStickerPreview.getX()
-                            + recyclerViewLeftMargin
-                            + clickedStickerPreview.getWidth() / 2f;
-            final float clickedViewCenterY =
-                    clickedStickerPreview.getY() + clickedStickerPreview.getHeight() / 2f;
-
-            expandedViewLeftX = clickedViewCenterX - expandedStickerPreview.getWidth() / 2f;
-            expandedViewTopY = clickedViewCenterY - expandedStickerPreview.getHeight() / 2f;
-
-            // If the new x or y positions are negative, anchor them to 0 to avoid clipping
-            // the left side of the device and the top of the recycler view.
-            expandedViewLeftX = Math.max(expandedViewLeftX, 0);
-            expandedViewTopY = Math.max(expandedViewTopY, 0);
-
-            // If the bottom or right sides are clipped, we need to move the top left positions
-            // so that those sides are no longer clipped.
-            final float adjustmentX =
-                    Math.max(
-                            expandedViewLeftX
-                                    + expandedStickerPreview.getWidth()
-                                    - recyclerViewWidth
-                                    - recyclerViewRightMargin,
-                            0);
-            final float adjustmentY =
-                    Math.max(expandedViewTopY + expandedStickerPreview.getHeight() - recyclerViewHeight, 0);
-
-            expandedViewLeftX -= adjustmentX;
-            expandedViewTopY -= adjustmentY;
-
-
-            expandedStickerPreview.setX(expandedViewLeftX);
-            expandedStickerPreview.setY(expandedViewTopY);
+            expandedStickerPreview.setX(centerX - expandedStickerPreview.getWidth() / 2f);
+            expandedStickerPreview.setY(centerY - expandedStickerPreview.getHeight() / 2f);
         }
     }
 
@@ -173,20 +157,31 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
 
         this.clickedStickerPreview = clickedStickerPreview;
         if (expandedStickerPreview != null) {
-            positionExpandedStickerPreview(position);
+            positionExpandedStickerPreview();
 
             Sticker sticker = stickerPack.getStickers().get(position);
             final Uri stickerAssetUri = StickerPackLoader.getStickerAssetUri(stickerPack.identifier, sticker.imageFileName);
-            DraweeController controller = com.facebook.drawee.backends.pipeline.Fresco.newDraweeControllerBuilder()
-                    .setUri(stickerAssetUri)
+            
+            SimpleDraweeView expandedImage = expandedStickerPreview.findViewById(R.id.sticker_details_expanded_sticker);
+            
+            int expandedSize = expandedImage != null ? expandedImage.getLayoutParams().width : 300;
+            if (expandedSize <= 0) expandedSize = 300;
+
+            // PERFORMANCE: Resize for the expanded view to its display size.
+            ImageRequest request = ImageRequestBuilder.newBuilderWithSource(stickerAssetUri)
+                    .setResizeOptions(new ResizeOptions(expandedSize, expandedSize))
+                    .build();
+
+            DraweeController controller = Fresco.newDraweeControllerBuilder()
+                    .setImageRequest(request)
                     .setAutoPlayAnimations(true)
                     .build();
 
-            // Find views within the card
-            SimpleDraweeView expandedImage = expandedStickerPreview.findViewById(R.id.sticker_details_expanded_sticker);
             android.widget.TextView nameText = expandedStickerPreview.findViewById(R.id.expanded_sticker_name);
             android.widget.TextView emojisText = expandedStickerPreview.findViewById(R.id.expanded_sticker_emojis);
             android.widget.TextView sizeText = expandedStickerPreview.findViewById(R.id.expanded_sticker_size);
+            View editEmojiButton = expandedStickerPreview.findViewById(R.id.edit_emoji_button);
+            View deleteStickerButton = expandedStickerPreview.findViewById(R.id.delete_sticker_button);
 
             if (expandedImage != null) {
                 expandedImage.setImageResource(errorResource);
@@ -195,9 +190,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
             if (nameText != null) {
                 nameText.setText(sticker.imageFileName);
                 if (sticker.validationError != null) {
-                    nameText.setTextColor(android.graphics.Color.parseColor("#E53935")); // Red for error
-                } else {
-                    nameText.setTextColor(android.graphics.Color.BLACK);
+                    nameText.setTextColor(android.graphics.Color.parseColor("#E53935"));
                 }
             }
             if (emojisText != null) {
@@ -206,26 +199,171 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
             if (sizeText != null) {
                 String sizeStr = android.text.format.Formatter.formatShortFileSize(expandedStickerPreview.getContext(), sticker.size);
                 if (sticker.validationError != null) {
-                    sizeText.setText(sizeStr + " • " + sticker.validationError);
+                    sizeText.setText(sizeStr + "  " + sticker.validationError);
                     sizeText.setTextColor(android.graphics.Color.parseColor("#E53935"));
                 } else {
                     sizeText.setText(sizeStr);
-                    sizeText.setTextColor(android.graphics.Color.parseColor("#9B9B9B"));
+                    sizeText.setAlpha(0.7f);
                 }
             }
 
-            expandedStickerPreview.setVisibility(View.VISIBLE);
-            recyclerView.setAlpha(EXPANDED_STICKER_PREVIEW_BACKGROUND_ALPHA);
+            if (editEmojiButton != null) {
+                editEmojiButton.setOnClickListener(v -> {
+                    final android.widget.EditText editText = new android.widget.EditText(expandedStickerPreview.getContext());
+                    editText.setText(sticker.emojis != null ? android.text.TextUtils.join("", sticker.emojis) : "");
+                    editText.setHint("Enter up to 3 emojis");
+                    
+                    android.widget.FrameLayout container = new android.widget.FrameLayout(expandedStickerPreview.getContext());
+                    android.widget.FrameLayout.LayoutParams params = new android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                    params.leftMargin = params.rightMargin = 60;
+                    params.topMargin = 20;
+                    editText.setLayoutParams(params);
+                    container.addView(editText);
 
-            expandedStickerPreview.setOnClickListener(v -> hideExpandedStickerPreview());
+                    new com.google.android.material.dialog.MaterialAlertDialogBuilder(expandedStickerPreview.getContext())
+                            .setTitle("Edit Sticker Emojis")
+                            .setView(container)
+                            .setPositiveButton("Save", (dialog, which) -> {
+                                String text = editText.getText().toString();
+                                List<String> newEmojis = new ArrayList<>();
+                                for (int i = 0; i < text.length(); ) {
+                                    int codePoint = text.codePointAt(i);
+                                    newEmojis.add(new String(Character.toChars(codePoint)));
+                                    i += Character.charCount(codePoint);
+                                }
+                                if (newEmojis.isEmpty()) newEmojis.add("\uD83D\uDE00");
+                                if (newEmojis.size() > 3) newEmojis = new ArrayList<>(newEmojis.subList(0, 3));
+
+                                try {
+                                    WastickerParser.updateStickerEmojis(expandedStickerPreview.getContext(), stickerPack.identifier, sticker.imageFileName, newEmojis);
+                                    sticker.setEmojis(newEmojis);
+                                    if (emojisText != null) {
+                                        emojisText.setText(android.text.TextUtils.join(" ", newEmojis));
+                                    }
+                                    notifyItemChanged(position);
+                                    android.widget.Toast.makeText(expandedStickerPreview.getContext(), "Emojis updated", android.widget.Toast.LENGTH_SHORT).show();
+                                } catch (Exception e) {
+                                    android.widget.Toast.makeText(expandedStickerPreview.getContext(), "Error updating emojis", android.widget.Toast.LENGTH_SHORT).show();
+                                }
+                            })
+                            .setNegativeButton("Cancel", null)
+                            .show();
+                });
+            }
+
+            if (deleteStickerButton != null) {
+                deleteStickerButton.setOnClickListener(v -> {
+                    new com.google.android.material.dialog.MaterialAlertDialogBuilder(expandedStickerPreview.getContext())
+                            .setTitle("Delete Sticker")
+                            .setMessage("Delete this sticker from the pack?")
+                            .setPositiveButton("Delete", (dialog, which) -> {
+                                deleteSticker(position);
+                            })
+                            .setNegativeButton("Cancel", null)
+                            .show();
+                });
+            }
+
+            expandedStickerPreview.setVisibility(View.VISIBLE);
+            
+            View overlay = null;
+            if (expandedStickerPreview.getParent() instanceof ViewGroup) {
+                overlay = ((ViewGroup) expandedStickerPreview.getParent()).findViewById(R.id.expanded_sticker_overlay);
+            }
+            if (overlay != null) {
+                overlay.setVisibility(View.VISIBLE);
+                overlay.setOnClickListener(v -> hideExpandedStickerPreview());
+            }
+
+            applyBlurAndDim(true);
+            toggleBackgroundAnimations(false);
+        }
+    }
+
+    private void deleteSticker(int position) {
+        if (position < 0 || position >= stickerPack.getStickers().size()) return;
+        
+        Sticker sticker = stickerPack.getStickers().get(position);
+        View contextView = expandedStickerPreview != null ? expandedStickerPreview : recyclerView;
+        if (contextView == null) return;
+
+        try {
+            WastickerParser.deleteSticker(contextView.getContext(), stickerPack.identifier, sticker.imageFileName);
+            stickerPack.getStickers().remove(position);
+            notifyItemRemoved(position);
+            notifyItemRangeChanged(position, stickerPack.getStickers().size());
+            hideExpandedStickerPreview();
+            
+            StickerContentProvider provider = StickerContentProvider.getInstance();
+            if (provider != null) provider.invalidateStickerPackList();
+            
+            android.widget.Toast.makeText(contextView.getContext(), "Sticker deleted", android.widget.Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            android.widget.Toast.makeText(contextView.getContext(), "Error deleting: " + e.getMessage(), android.widget.Toast.LENGTH_LONG).show();
         }
     }
 
     public void hideExpandedStickerPreview() {
         if (isStickerPreviewExpanded() && expandedStickerPreview != null) {
-            clickedStickerPreview.setVisibility(View.VISIBLE);
             expandedStickerPreview.setVisibility(View.INVISIBLE);
-            recyclerView.setAlpha(COLLAPSED_STICKER_PREVIEW_BACKGROUND_ALPHA);
+            
+            View overlay = null;
+            if (expandedStickerPreview.getParent() instanceof ViewGroup) {
+                overlay = ((ViewGroup) expandedStickerPreview.getParent()).findViewById(R.id.expanded_sticker_overlay);
+            }
+            if (overlay != null) {
+                overlay.setVisibility(View.INVISIBLE);
+            }
+
+            applyBlurAndDim(false);
+            toggleBackgroundAnimations(true);
+        }
+    }
+
+    private void toggleBackgroundAnimations(boolean start) {
+        if (recyclerView == null) return;
+        for (int i = 0; i < recyclerView.getChildCount(); i++) {
+            View child = recyclerView.getChildAt(i);
+            SimpleDraweeView draweeView = child.findViewById(R.id.sticker_preview);
+            if (draweeView != null) {
+                DraweeController controller = draweeView.getController();
+                if (controller != null) {
+                    Animatable animatable = controller.getAnimatable();
+                    if (animatable != null) {
+                        if (start) {
+                            if (!animatable.isRunning()) animatable.start();
+                        } else {
+                            if (animatable.isRunning()) animatable.stop();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void applyBlurAndDim(boolean active) {
+        if (recyclerView == null) return;
+        
+        float alpha = active ? EXPANDED_STICKER_PREVIEW_BACKGROUND_ALPHA : COLLAPSED_STICKER_PREVIEW_BACKGROUND_ALPHA;
+        float blurRadius = 20f;
+
+        recyclerView.setAlpha(alpha);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            recyclerView.setRenderEffect(active ? RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP) : null);
+        }
+
+        ViewGroup container = (ViewGroup) recyclerView.getParent();
+        if (container != null && container.getParent() instanceof ViewGroup) {
+            ViewGroup root = (ViewGroup) container.getParent();
+            for (int i = 0; i < root.getChildCount(); i++) {
+                View child = root.getChildAt(i);
+                if (child != container) {
+                    child.setAlpha(alpha);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        child.setRenderEffect(active ? RenderEffect.createBlurEffect(blurRadius, blurRadius, Shader.TileMode.CLAMP) : null);
+                    }
+                }
+            }
         }
     }
 
@@ -235,11 +373,6 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewVi
 
     @Override
     public int getItemCount() {
-        int numberOfPreviewImagesInPack;
-        numberOfPreviewImagesInPack = stickerPack.getStickers().size();
-        if (cellLimit > 0) {
-            return Math.min(numberOfPreviewImagesInPack, cellLimit);
-        }
-        return numberOfPreviewImagesInPack;
+        return stickerPack.getStickers().size();
     }
 }

@@ -16,17 +16,15 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
-import androidx.recyclerview.widget.DividerItemDecoration;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.google.android.material.floatingactionbutton.FloatingActionButton;
+import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -43,13 +41,17 @@ public class StickerPackListActivity extends AddStickerPackActivity {
     private volatile boolean whitelistCheckCancelled;
     private ArrayList<StickerPack> stickerPackList;
     private View emptyStateLayout;
-    private FloatingActionButton importFab;
+    private ExtendedFloatingActionButton importFab;
     private ActivityResultLauncher<Intent> filePickerLauncher;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_sticker_pack_list);
+
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+
         packRecyclerView = findViewById(R.id.sticker_pack_list);
         emptyStateLayout = findViewById(R.id.empty_state_layout);
         importFab = findViewById(R.id.import_button_fab);
@@ -124,33 +126,49 @@ public class StickerPackListActivity extends AddStickerPackActivity {
         executor.execute(() -> {
             StickerPackListActivity activity = ref.get();
             if (activity == null) return;
-            String error;
+            String error = null;
+            ArrayList<StickerPack> freshPacks = null;
             try {
                 WastickerParser.importStickerPack(activity, uri);
                 StickerContentProvider provider = StickerContentProvider.getInstance();
                 if (provider != null) provider.invalidateStickerPackList();
-                error = null;
+                // Fetch fresh list on the background thread — zero main-thread work
+                freshPacks = StickerPackLoader.fetchStickerPacks(activity);
             } catch (Exception e) {
                 error = e.getMessage();
             }
             final String finalError = error;
+            final ArrayList<StickerPack> finalPacks = freshPacks;
             mainHandler.post(() -> {
                 StickerPackListActivity act = ref.get();
                 if (act == null) return;
                 if (finalError != null) {
                     Toast.makeText(act, "Import error: " + finalError, Toast.LENGTH_LONG).show();
                 } else {
-                    Toast.makeText(act, "Pack imported! Reloading...", Toast.LENGTH_SHORT).show();
-                    Intent intent = new Intent(act, EntryActivity.class);
-                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
-                    act.startActivity(intent);
-                    act.finish();
+                    // Update list in-place — user never sees a reload
+                    Toast.makeText(act, "✓ Pack imported!", Toast.LENGTH_SHORT).show();
+                    if (finalPacks != null) {
+                        act.stickerPackList.clear();
+                        act.stickerPackList.addAll(finalPacks);
+                        // Ensure adapter is using the updated list object
+                        act.allStickerPacksListAdapter.setStickerPackList(act.stickerPackList);
+                        act.allStickerPacksListAdapter.notifyDataSetChanged();
+                        act.updateEmptyState();
+                        if (act.getSupportActionBar() != null) {
+                            act.getSupportActionBar().setTitle(act.getResources()
+                                .getQuantityString(R.plurals.title_activity_sticker_packs_list,
+                                    act.stickerPackList.size()));
+                        }
+                        // Scroll to show the newly imported pack
+                        act.packRecyclerView.smoothScrollToPosition(act.stickerPackList.size() - 1);
+                    }
                 }
             });
         });
     }
 
     private void deletePack(int position) {
+        if (position < 0 || position >= stickerPackList.size()) return;
         StickerPack pack = stickerPackList.get(position);
         WeakReference<StickerPackListActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
@@ -159,6 +177,8 @@ public class StickerPackListActivity extends AddStickerPackActivity {
             String error;
             try {
                 WastickerParser.deleteStickerPack(activity, pack.identifier);
+                StickerContentProvider provider = StickerContentProvider.getInstance();
+                if (provider != null) provider.invalidateStickerPackList();
                 error = null;
             } catch (Exception e) {
                 error = e.getMessage();
@@ -171,9 +191,19 @@ public class StickerPackListActivity extends AddStickerPackActivity {
                     Toast.makeText(act, "Error: " + finalError, Toast.LENGTH_LONG).show();
                     act.allStickerPacksListAdapter.notifyItemChanged(position);
                 } else {
+                    // Critical: remove from the actual list object the adapter is using
                     act.stickerPackList.remove(position);
                     act.allStickerPacksListAdapter.notifyItemRemoved(position);
+                    // Update remaining item indices to prevent ghosting or index mismatch
+                    if (position < act.stickerPackList.size()) {
+                        act.allStickerPacksListAdapter.notifyItemRangeChanged(position, act.stickerPackList.size() - position);
+                    }
                     act.updateEmptyState();
+                    if (act.getSupportActionBar() != null) {
+                        act.getSupportActionBar().setTitle(act.getResources()
+                                .getQuantityString(R.plurals.title_activity_sticker_packs_list,
+                                        act.stickerPackList.size()));
+                    }
                     Toast.makeText(act, "Pack deleted", Toast.LENGTH_SHORT).show();
                 }
             });
@@ -213,21 +243,20 @@ public class StickerPackListActivity extends AddStickerPackActivity {
         super.onResume();
         whitelistCheckCancelled = false;
         WeakReference<StickerPackListActivity> ref = new WeakReference<>(this);
-        final StickerPack[] packs = stickerPackList.toArray(new StickerPack[0]);
         executor.execute(() -> {
             if (whitelistCheckCancelled) return;
             StickerPackListActivity activity = ref.get();
             if (activity == null) return;
-            for (StickerPack stickerPack : packs) {
+            // Directly update the objects in the existing list to maintain reference integrity
+            for (StickerPack stickerPack : activity.stickerPackList) {
                 stickerPack.setIsWhitelisted(WhitelistCheck.isWhitelisted(activity, stickerPack.identifier));
             }
-            final List<StickerPack> result = Arrays.asList(packs);
             mainHandler.post(() -> {
                 if (whitelistCheckCancelled) return;
                 StickerPackListActivity act = ref.get();
-                if (act == null) return;
-                act.allStickerPacksListAdapter.setStickerPackList(result);
-                act.allStickerPacksListAdapter.notifyDataSetChanged();
+                if (act != null) {
+                    act.allStickerPacksListAdapter.notifyDataSetChanged();
+                }
             });
         });
     }
@@ -243,11 +272,6 @@ public class StickerPackListActivity extends AddStickerPackActivity {
         packRecyclerView.setAdapter(allStickerPacksListAdapter);
         packLayoutManager = new LinearLayoutManager(this);
         packLayoutManager.setOrientation(RecyclerView.VERTICAL);
-        DividerItemDecoration dividerItemDecoration = new DividerItemDecoration(
-                packRecyclerView.getContext(),
-                packLayoutManager.getOrientation()
-        );
-        packRecyclerView.addItemDecoration(dividerItemDecoration);
         packRecyclerView.setLayoutManager(packLayoutManager);
         packRecyclerView.getViewTreeObserver().addOnGlobalLayoutListener(this::recalculateColumnCount);
     }

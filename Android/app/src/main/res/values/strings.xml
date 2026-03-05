@@ -50,9 +50,20 @@
     <string name="edit_pack">Edit Pack</string>
     <string name="create_pack">Create Pack</string>
     <string name="sticker_limit_reached">Sticker limit reached (30 max)</string>
+    <string name="edit_emojis_title">Edit Emojis (max 3)</string>
     <string name="pack_name_empty">Pack name cannot be empty</string>
     <string name="sticker_count">%d stickers</string>
     <string name="edit_button">Edit</string>
     <string name="delete_button">Delete</string>
     <string name="delete_pack_confirm">Delete this sticker pack?</string>
+
+    <!-- Sticker Info Strings -->
+    <string name="sticker_info_dimens_format">%1$dx%2$d</string>
+    <string name="sticker_info_frames_format">%d frames</string>
+    <string name="sticker_info_fps_format">%d fps</string>
+    <string name="sticker_info_webp">Format: WebP</string>
+    <string name="dot_separator"> • </string>
+
+    <!-- Entry Activity -->
+    <string name="error_loading_packs">Error loading sticker packs: %s</string>
 </resources>

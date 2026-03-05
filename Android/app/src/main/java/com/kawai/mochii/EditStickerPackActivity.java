@@ -6,8 +6,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.Editable;
-import android.text.TextWatcher;
+import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -76,6 +75,11 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
             if (getSupportActionBar() != null) {
                 getSupportActionBar().setTitle(R.string.edit_pack);
                 getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+            }
+
+            // Load tray icon
+            if (pack.trayImageFile != null) {
+                trayIconPreview.setImageURI(StickerPackLoader.getStickerAssetUri(pack.identifier, pack.trayImageFile));
             }
 
             // Load existing stickers
@@ -211,7 +215,48 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
     }
 
     @Override
-    public void onStickerClicked(int position) {
-        // TODO: emoji edit dialog
+    public void onStickerClicked(int position, View stickerView) {
+        if (position < 0 || position >= stickerItems.size()) return;
+        EditStickerAdapter.StickerItem item = stickerItems.get(position);
+
+        // Build current emoji string for display
+        StringBuilder sb = new StringBuilder();
+        if (item.emojis != null) for (String e : item.emojis) sb.append(e);
+
+        final com.google.android.material.textfield.TextInputEditText input =
+                new com.google.android.material.textfield.TextInputEditText(this);
+        input.setText(sb.toString());
+        input.setHint("Enter up to 3 emojis");
+        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+
+        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
+        int dp16 = (int) (16 * getResources().getDisplayMetrics().density);
+        container.setPadding(dp16, 0, dp16, 0);
+        container.addView(input);
+
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.edit_emojis_title)
+                .setView(container)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    String text = input.getText() != null ? input.getText().toString().trim() : "";
+                    // Split into grapheme clusters so multi-codepoint emoji count as one
+                    java.text.BreakIterator bi = java.text.BreakIterator.getCharacterInstance();
+                    bi.setText(text);
+                    List<String> newEmojis = new ArrayList<>();
+                    int start = bi.first();
+                    for (int end = bi.next();
+                         end != java.text.BreakIterator.DONE && newEmojis.size() < 3;
+                         end = bi.next()) {
+                        String cluster = text.substring(start, end);
+                        // Only include non-ASCII characters (emoji)
+                        if (cluster.codePointAt(0) > 0xFF) newEmojis.add(cluster);
+                        start = end;
+                    }
+                    if (newEmojis.isEmpty()) newEmojis.add("\uD83D\uDE00"); // fallback: 😀
+                    item.emojis = newEmojis;
+                    adapter.notifyItemChanged(position);
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
     }
 }

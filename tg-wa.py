@@ -30,6 +30,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress verbose pyrogram logs
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
+
 # Get environment variables
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
@@ -75,18 +78,24 @@ def save_authorized_chats():
 
 def sanitize_filename(name: str) -> str:
     """Stricter sanitization for filesystem and Telegram compatibility."""
-    # 1. Remove dots specifically (they are the main cause of extension mangling)
+    # 1. Remove leading @ symbol (causes WhatsApp URI parsing failures)
+    name = name.lstrip("@")
+    # 2. Remove dots specifically (they are the main cause of extension mangling)
     name = name.replace(".", "")
-    # 2. Remove non-ASCII characters/emojis for the filename only
+    # 3. Remove non-ASCII characters/emojis for the filename only
     name = name.encode("ascii", "ignore").decode("ascii")
-    # 3. Remove invalid OS characters
+    # 4. Remove invalid OS characters
     name = re.sub(r'[<>:"/\\|?*]', '', name)
-    # 4. Replace spaces and hyphens with underscores
+    # 5. Replace spaces and hyphens with underscores
     name = re.sub(r'[\s-]+', '_', name).strip("_")
     
     # Return a fallback if the name became empty (e.g. it was all emojis)
     return name[:50] if name else "sticker_pack"
 
+
+# WhatsApp sticker hard limits
+WA_MAX_BYTES   = 500 * 1024  # 500 KB per sticker (hard limit)
+WA_ANIM_TARGET = 500 * 1024  # encode target (use full limit with fast encoding)
 
 def build_open_app_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -108,6 +117,10 @@ def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[b
                 return False, "Expected animated WebP but got static output"
     except Exception as e:
         return False, f"Cannot decode converted WebP: {e}"
+
+    # Size gate — WhatsApp rejects stickers >500 KB
+    if len(data) > WA_MAX_BYTES:
+        return False, f"Converted sticker is {len(data) // 1024}KB, exceeds WhatsApp's 500KB limit"
 
     return True, ""
 
@@ -240,68 +253,88 @@ async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool,
         return result
 
 def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
-    """Optimizes tray icon to be under 50KB and 96x96 size, returning BytesIO."""
+    """
+    Optimizes tray icon to be under 50KB and 96x96 pixels, returning BytesIO.
+    Correctly preserves alpha/transparency in all code paths.
+    """
     try:
-        # For animated/video stickers, extract first frame using ffmpeg
         if is_animated:
-            logger.info("Extracting first frame from animated sticker for tray icon")
-            with tempfile.TemporaryDirectory() as tmpdir:
-                tmppath = Path(tmpdir)
-                
-                # Save input file
-                input_path = tmppath / "input.webm"
-                input_path.write_bytes(tray_data)
-                
-                # Output frame path
-                output_path = tmppath / "frame.png"
-                
-                # Extract a representative frame (avoiding first frame which is often empty/black)
-                cmd = [
-                    'ffmpeg',
-                    '-i', str(input_path),
-                    '-vf', 'thumbnail=30', # Pick a representative frame from the first 30
-                    '-frames:v', '1',
-                    '-y',
-                    str(output_path)
-                ]
-                
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
-                
-                if result.returncode == 0 and output_path.exists():
-                    # Read the extracted frame into memory immediately to avoid file locking
-                    with open(output_path, 'rb') as f:
-                        frame_data = f.read()
-                    img = Image.open(BytesIO(frame_data))
-                    logger.info("Successfully extracted first frame for tray icon")
-                else:
-                    logger.warning(f"Failed to extract frame, creating placeholder: {result.stderr}")
-                    raise Exception("Frame extraction failed")
+            # Detect TGS (gzip-compressed Lottie JSON) by magic bytes \x1f\x8b
+            is_tgs = len(tray_data) >= 2 and tray_data[:2] == b'\x1f\x8b'
+
+            if is_tgs:
+                import gzip as _gzip
+                json_bytes = _gzip.decompress(tray_data)
+                try:
+                    import lottie  # type: ignore
+                    from lottie.exporters.png import export_png as _export_png  # type: ignore
+                    anim = lottie.Animation.load(BytesIO(json_bytes))
+                    frame_buf = BytesIO()
+                    _export_png(anim, frame_buf, frame=0, width=96, height=96)
+                    frame_buf.seek(0)
+                    img = Image.open(frame_buf).copy()
+                    logger.info("Rendered TGS first frame via lottie library for tray icon")
+                except ImportError:
+                    raise Exception("lottie library not available for TGS rendering")
+            else:
+                # WebM / video sticker — extract first frame via ffmpeg, keeping alpha plane.
+                logger.info("Extracting first frame from animated sticker for tray icon")
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    tmppath = Path(tmpdir)
+                    input_path = tmppath / "input.webm"
+                    input_path.write_bytes(tray_data)
+                    output_path = tmppath / "frame.png"
+                    cmd = [
+                        'ffmpeg',
+                        '-i', str(input_path),
+                        '-vf', r'select=eq(n\,0)',
+                        '-frames:v', '1',
+                        '-pix_fmt', 'rgba',
+                        '-y',
+                        str(output_path)
+                    ]
+                    result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
+                    if result.returncode == 0 and output_path.exists():
+                        with open(output_path, 'rb') as f:
+                            frame_data = f.read()
+                        img = Image.open(BytesIO(frame_data)).copy()
+                        logger.info("Successfully extracted first frame for tray icon")
+                    else:
+                        logger.warning(f"Failed to extract frame, creating placeholder: {result.stderr}")
+                        raise Exception("Frame extraction failed")
         else:
-            # Try to open as regular image
-            img = Image.open(BytesIO(tray_data))
+            img = Image.open(BytesIO(tray_data)).copy()
+
     except Exception as e:
-        logger.warning(f"Tray icon conversion failed, creating placeholder: {e}")
-        # Create a simple placeholder
-        img = Image.new("RGBA", (96, 96), (0, 0, 0, 0)) # Fully transparent background
-        from PIL import ImageDraw
-        draw = ImageDraw.Draw(img)
-        # Draw a simple sticker icon
-        draw.ellipse([20, 20, 76, 76], fill=(100, 100, 255, 255))
+        logger.warning(f"Tray icon conversion failed, using transparent placeholder: {e}")
+        img = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
+
+    # Simple transparency-preserving resize
+    if img.mode != "RGBA":
+        img = img.convert("RGBA")
     
-    img = img.convert("RGBA")
-    img = img.resize((96, 96), Image.LANCZOS)
+    # Create transparent 96x96 canvas
+    canvas = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
     
+    # Resize image to fit within 96x96 while maintaining aspect ratio
+    img.thumbnail((96, 96), Image.LANCZOS)
+    
+    # Center the image on transparent canvas
+    position = (
+        (96 - img.width) // 2,
+        (96 - img.height) // 2
+    )
+    canvas.paste(img, position, img)
+
+    # PNG uses compress_level, NOT quality
     output = BytesIO()
-    quality = 85
-    while True:
+    for compress_level in range(3, 10):
         output.seek(0)
         output.truncate(0)
-        img.save(output, format="PNG", optimize=True, quality=quality)
-        size = output.tell()
-        if size < 50000 or quality <= 10:
+        canvas.save(output, format="PNG", optimize=True, compress_level=compress_level)
+        if output.tell() < 50000:
             break
-        quality -= 10
-    
+
     output.seek(0)
     return output
 
@@ -365,7 +398,7 @@ def convert_to_whatsapp_static(img: Image.Image) -> BytesIO:
         else:
             quality -= 15
             
-        if quality < 20:
+        if quality < 5:
             logger.warning(f"Static sticker is {size/1024:.1f}KB, exceeds 100KB limit")
             break
     
@@ -412,6 +445,90 @@ def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
     return output
 
 
+
+
+def _encode_animated_webp_under_limit(
+    pil_frames: list,
+    frame_duration_ms: int,
+    max_size: int = 490 * 1024,
+) -> BytesIO:
+    """
+    Encode an animated WebP that fits within *max_size* bytes.
+    
+    FAST encoding strategy: Try a few key quality points instead of binary search.
+    Preserves transparency via kmax=1 + allow_mixed + alpha_quality.
+    """
+    # CRITICAL: Ensure we have at least 2 frames for animation
+    if len(pil_frames) < 2:
+        raise Exception(f"Cannot create animated WebP with only {len(pil_frames)} frame(s). Need at least 2.")
+    
+    def _try(frames, dur_ms, q):
+        buf = BytesIO()
+        frames[0].save(
+            buf, format="WEBP", save_all=True,
+            append_images=frames[1:],
+            duration=dur_ms, loop=0,
+            quality=q, method=0,       # fastest encoder
+            kmax=1,                    # every frame is a keyframe → no transparent bleed
+            allow_mixed=True,          # lossless alpha + lossy colour per frame
+            alpha_quality=90,          # high-quality alpha plane
+            background=(0, 0, 0, 0),
+        )
+        return buf
+
+    def _fast_quality_search(frames, dur_ms):
+        """Ultra-fast quality search: try only 3 key points for speed"""
+        for q in [50, 30, 15]:
+            buf = _try(frames, dur_ms, q)
+            sz = buf.tell()
+            if sz <= max_size:
+                buf.seek(0)
+                return buf, q, sz
+        return None, None, 0
+
+    # Try only essential decimation levels: 1, 2, 4 (skip 6 for speed)
+    decimation_levels = [1, 2, 4]
+    
+    for decimation in decimation_levels:
+        if decimation == 1:
+            cur_frames = pil_frames
+            cur_dur    = frame_duration_ms
+        else:
+            cur_frames = pil_frames[::decimation]
+            cur_dur    = min(frame_duration_ms * decimation, 1000)
+            
+            # Skip decimation levels that would produce inadequate frame counts
+            if len(cur_frames) < 2:
+                logger.debug(
+                    f"Decimation {decimation}x would yield {len(cur_frames)} frame(s) - skipping"
+                )
+                continue
+            
+            logger.info(
+                f"Animated WebP still too large — decimating to every {decimation}th frame "
+                f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
+            )
+
+        best_buf, best_q, best_size = _fast_quality_search(cur_frames, cur_dur)
+        if best_buf is not None:
+            logger.info(
+                f"✓ Animated WebP: {len(cur_frames)} frames "
+                f"(decimation={decimation}x), quality={best_q}, "
+                f"{best_size // 1024}KB"
+            )
+            return best_buf
+
+        logger.info(
+            f"Still over limit at decimation={decimation}x, quality=15 — "
+            f"trying more aggressive decimation…"
+        )
+
+    # No decimation level produced acceptable result - fail
+    raise Exception(
+        f"Could not encode animated WebP under {max_size // 1024}KB limit even with "
+        f"maximum decimation (4x) and minimum quality (15). "
+        f"Sticker is too complex to convert."
+    )
 
 
 async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
@@ -505,35 +622,24 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
             if len(pil_frames) < 2:
                 raise Exception(f"Too few valid frames ({len(pil_frames)}) to make animation")
 
-            # Encode animated WebP using sticker-convert's proven technique:
-            # kmax=1 forces every frame to be a keyframe — prevents delta-coded frames
-            # from bleeding transparent regions (white/black background bug).
-            # allow_mixed=True + alpha_quality keeps alpha lossless per frame.
-            output = BytesIO()
-            quality = 80
-            while True:
-                output.seek(0)
-                output.truncate(0)
-                pil_frames[0].save(
-                    output, format="WEBP", save_all=True,
-                    append_images=pil_frames[1:],
-                    duration=frame_duration_ms, loop=0,
-                    quality=quality, method=4,
-                    kmax=1,
-                    allow_mixed=True,
-                    alpha_quality=90,
-                    background=(0, 0, 0, 0),
-                )
-                if output.tell() <= 480 * 1024 or quality <= 20:
-                    break
-                quality -= 10
-                logger.info(f"TGS WebP too large ({output.tell()//1024}KB), reducing quality to {quality}")
-
-            final_size = output.tell()
+            # Encode using shared helper — finer quality steps + frame decimation
+            # if quality alone can't get under the limit.  Transparency settings
+            # (kmax=1 / allow_mixed / alpha_quality) are never changed.
+            output = _encode_animated_webp_under_limit(
+                pil_frames, frame_duration_ms, max_size=WA_ANIM_TARGET
+            )
+            
+            # CRITICAL: Verify output is under 500KB hard limit
+            output_size = output.seek(0, 2)
             output.seek(0)
+            if output_size > WA_MAX_BYTES:
+                raise Exception(f"Encoded output is {output_size // 1024}KB, exceeds 500KB hard limit")
+            if output_size > WA_ANIM_TARGET:
+                raise Exception(f"Encoder bug: output is {output_size // 1024}KB, exceeds target {WA_ANIM_TARGET // 1024}KB")
+            
             logger.info(
                 f"✓ TGS → animated WebP: "
-                f"{len(pil_frames)} frames, {final_size / 1024:.1f}KB, quality={quality}"
+                f"{len(pil_frames)} frames, {output_size // 1024}KB"
             )
             return output
 
@@ -588,32 +694,53 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         try:
             probe = ffmpeg.probe(str(input_path))
             video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
-            duration = float(video_info.get('duration', probe.get('format', {}).get('duration', 3)))
+            
+            # For WebM, format-level duration is more reliable than stream-level
+            # Try format duration first, then stream duration, then calculate from frame count
+            format_duration = probe.get('format', {}).get('duration')
+            stream_duration = video_info.get('duration')
+            nb_frames = video_info.get('nb_frames')
+            
+            if format_duration and float(format_duration) > 0.1:
+                duration = float(format_duration)
+            elif stream_duration and float(stream_duration) > 0.1:
+                duration = float(stream_duration)
+            elif nb_frames and int(nb_frames) > 0:
+                # Calculate from frame count and fps
+                input_fps = parse_frame_rate(video_info.get('r_frame_rate', '30/1'))
+                duration = int(nb_frames) / input_fps
+            else:
+                duration = 0.0
+            
             input_fps = parse_frame_rate(video_info.get('r_frame_rate', '15/1'))
-            logger.info(f"Video input: duration={duration:.2f}s, fps={input_fps:.2f}")
+            logger.info(f"Video probe: format_duration={format_duration}s, stream_duration={stream_duration}s, fps={input_fps:.2f}, frames={nb_frames}")
         except Exception as e:
             logger.warning(f"Could not probe input: {e}, using defaults")
-            duration = 3.0
+            duration = 0.0
             input_fps = 15.0
 
-        # WhatsApp: max 10 s, target 15-20 fps for reasonable file sizes
-        output_duration = min(duration, 10.0)
-        target_fps = min(input_fps, 20.0)  # Cap at 20fps; each frame ≥8ms (WhatsApp min)
+        # For WebM stickers, duration metadata is often broken (reports 0.001-0.002s for 1-2s videos)
+        # Solution: Extract ALL available frames (don't limit by duration), then check what we got
+        # WhatsApp limit: 10s max, 8fps min (8ms/frame min)
+        target_fps = min(input_fps, 20.0)  # Cap at 20fps for file size
         target_fps = max(target_fps, 8.0)  # Ensure at least 8fps
         frame_duration_ms = max(8, int(1000.0 / target_fps))
-        max_frames = int(output_duration * target_fps)
+        
+        # Don't use duration to calculate max_frames - it's unreliable
+        # WhatsApp max: 10s * 20fps = 200 frames (safety limit)
+        max_frames = 200
 
         # --- 2. Extract frames as RGBA PNG using ffmpeg ---
         # Force -c:v libvpx-vp9 (software decoder) — same as sticker-convert's
         # CodecContext.create("libvpx-vp9", "r"). The hardware vp9 decoder does NOT
         # expose the VP9 alpha plane; the software libvpx-vp9 decoder does.
+        # Extract ALL available frames up to max_frames (ignoring broken duration metadata)
         extract_cmd = [
             'ffmpeg', '-y',
             '-c:v', 'libvpx-vp9',       # force software decoder to get alpha plane
             '-i', str(input_path),
-            '-t', str(output_duration),
             '-vf', f'fps={target_fps},format=rgba',
-            '-vframes', str(max_frames),
+            '-vframes', str(max_frames),  # safety limit only
             '-vsync', 'cfr',
             str(frames_dir / 'frame_%04d.png')
         ]
@@ -643,40 +770,25 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         if len(pil_frames) < 2:
             raise Exception(f"Too few valid frames ({len(pil_frames)}) for animation")
 
-        # --- 4. Encode animated WebP using sticker-convert's proven technique ---
-        # kmax=1     : every frame is a keyframe — prevents delta-coded frames from
-        #              bleeding transparent regions from previous frames (the root
-        #              cause of white/black backgrounds in animated WebP).
-        # allow_mixed: per-frame lossless/lossy mixing, keeping alpha regions lossless.
-        # alpha_quality: compress the alpha channel at full quality to preserve edges.
-        output = BytesIO()
-        max_size = 480 * 1024
-        quality = 80
-        while True:
-            output.seek(0)
-            output.truncate(0)
-            pil_frames[0].save(
-                output, format="WEBP", save_all=True,
-                append_images=pil_frames[1:],
-                duration=frame_duration_ms, loop=0,
-                quality=quality, method=4,
-                kmax=1,             # sticker-convert: force every frame as keyframe
-                allow_mixed=True,   # sticker-convert: lossless alpha + lossy color
-                alpha_quality=90,   # sticker-convert: high quality alpha channel
-                background=(0, 0, 0, 0),
-            )
-            size = output.tell()
-            if size <= max_size or quality <= 20:
-                break
-            quality -= 10
-            logger.info(f"Video WebP too large ({size // 1024}KB), reducing quality to {quality}")
-
-        final_size = output.tell()
+        # --- 4. Encode animated WebP using shared helper ---
+        # Uses finer quality steps + frame decimation to guarantee ≤500KB
+        # while keeping kmax=1 / allow_mixed / alpha_quality intact.
+        output = _encode_animated_webp_under_limit(
+            pil_frames, frame_duration_ms, max_size=WA_ANIM_TARGET
+        )
+        final_size = output.seek(0, 2)
         output.seek(0)
+        
+        # CRITICAL: Verify output is under 500KB hard limit
+        if final_size > WA_MAX_BYTES:
+            raise Exception(f"Encoded output is {final_size // 1024}KB, exceeds 500KB hard limit")
+        if final_size > WA_ANIM_TARGET:
+            raise Exception(f"Encoder bug: output is {final_size // 1024}KB, exceeds target {WA_ANIM_TARGET // 1024}KB")
+        
         logger.info(
             f"✓ Video → animated WebP: "
-            f"{len(pil_frames)} frames, {final_size / 1024:.1f}KB, "
-            f"fps={target_fps:.0f}, quality={quality}"
+            f"{len(pil_frames)} source frames, {final_size / 1024:.1f}KB, "
+            f"fps={target_fps:.0f}"
         )
         return output
 
@@ -700,9 +812,19 @@ def _is_animated_webp_bytes(data: bytes) -> bool:
         return False
     if data[0:4] != b'RIFF' or data[8:12] != b'WEBP':
         return False
+    
+    # Check for VP8X chunk (extended format with animation flag)
     if data[12:16] == b'VP8X':
         flags = data[20] & 0xFF
         return bool(flags & 0x02)  # Animation bit
+    
+    # Check for ANIM chunk (older format)
+    # Search first 512 bytes for ANIM chunk
+    search_end = min(len(data), 512)
+    if b'ANIM' in data[12:search_end]:
+        return True
+    
+    # If neither VP8X with anim flag nor ANIM chunk found, it's static
     return False
 
 
@@ -868,6 +990,11 @@ async def create_wastickers_zip(
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
         logger.debug("Added tray icon, author.txt, and title.txt to folder.")
 
+        # Determine pack type ONCE before processing (not per-sticker)
+        should_be_animated = any(s.is_animated or s.is_video for s in stickers)
+        pack_type = "Animated" if should_be_animated else "Static"
+        logger.info(f"Pack type determined: {pack_type} ({sum(1 for s in stickers if s.is_animated)} TGS + {sum(1 for s in stickers if s.is_video)} video + {sum(1 for s in stickers if not (s.is_animated or s.is_video))} static)")
+
         # Process each sticker
         for i, sticker in enumerate(stickers, 1):
             try:
@@ -907,49 +1034,91 @@ async def create_wastickers_zip(
                     for warning in verification['warnings']:
                         logger.info(f"⚠️ Sticker {i}: {warning}")
 
-                # Force ALL stickers to animated if the pack is marked as animated
-                should_be_animated = any(s.is_animated or s.is_video for s in stickers)
+                converted = None
+                conversion_failed = False
 
+                # === ANIMATED/VIDEO STICKER CONVERSION ===
                 if sticker.is_animated or sticker.is_video:
+                    logger.info(f"Sticker {i}/{total}: Converting {'TGS' if sticker.is_animated else 'video'} to animated WebP")
                     try:
                         animated_out = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
                         animated_bytes = animated_out.getvalue()
-                        if not _is_animated_webp_bytes(animated_bytes):
-                            logger.warning(f"Sticker {i}: conversion produced static WebP - wrapping into guaranteed animated output")
-                            img = Image.open(BytesIO(animated_bytes))
-                            converted = convert_to_whatsapp_one_frame_animation(img)
+                        
+                        # Verify it's actually animated
+                        is_anim = _is_animated_webp_bytes(animated_bytes)
+                        logger.debug(f"Sticker {i}: Output is {'ANIMATED' if is_anim else 'STATIC'} ({len(animated_bytes)//1024}KB)")
+                        
+                        if not is_anim:
+                            logger.error(f"Sticker {i}: Conversion produced STATIC WebP - skipping (this should not happen)")
+                            stats['skipped'] += 1
+                            stats['invalid'] += 1
+                            stats['skipped_reasons'].append(f"Sticker {i}: conversion produced static instead of animated")
+                            continue
                         else:
                             converted = BytesIO(animated_bytes)
+                            logger.info(f"Sticker {i}: Successfully converted to animated WebP")
+                            
                     except Exception as anim_err:
-                        logger.warning(f"Sticker {i}: animated conversion failed ({anim_err}) - forcing guaranteed animated fallback")
-                        try:
-                            if sticker.is_video:
-                                fallback_source = animated_bytes if 'animated_bytes' in locals() and animated_bytes else sticker_data
-                                img = Image.open(BytesIO(fallback_source))
-                            else:
-                                img = Image.open(BytesIO(sticker_data))
-                            converted = convert_to_whatsapp_one_frame_animation(img)
-                        except Exception:
-                            logger.error(f"Fallback failed for sticker {i}, skipping.")
-                            stats['skipped'] += 1
-                            stats['skipped_reasons'].append(f"Sticker {i}: conversion failed")
-                            continue
+                        logger.error(f"Sticker {i}: Animated conversion failed: {anim_err}")
+                        conversion_failed = True
+                    
+                    # Last resort fallback for animated stickers
+                    if conversion_failed:
+                        logger.error(f"Sticker {i}: {'TGS' if sticker.is_animated else 'video'} conversion failed - skipping")
+                        stats['skipped'] += 1
+                        stats['skipped_reasons'].append(f"Sticker {i}: {'TGS' if sticker.is_animated else 'video'} conversion failed")
+                        continue
+
+                # === STATIC STICKER IN ANIMATED PACK ===
                 elif should_be_animated:
-                    # Static sticker in an animated pack -> convert to 1-frame animation
-                    logger.info(f"Sticker {i}: static in animated pack - converting to 1-frame animation")
+                    # Static stickers should not be mixed with animated packs - skip them
+                    logger.warning(f"Sticker {i}/{total}: Static sticker found in animated pack - skipping to maintain pack consistency")
+                    stats['skipped'] += 1
+                    stats['skipped_reasons'].append(f"Sticker {i}: static sticker in animated pack")
+                    continue
+
+                # === STATIC STICKER IN STATIC PACK ===
+                else:
+                    logger.info(f"Sticker {i}/{total}: Converting static sticker")
                     try:
                         img = Image.open(BytesIO(sticker_data))
-                        converted = convert_to_whatsapp_one_frame_animation(img)
+                        converted = convert_to_whatsapp_static(img)
                     except Exception as e:
-                        logger.error(f"Failed to convert static to 1-frame anim for sticker {i}: {e}")
+                        logger.error(f"Sticker {i}: Failed to convert static sticker: {e}")
                         stats['skipped'] += 1
+                        stats['skipped_reasons'].append(f"Sticker {i}: static conversion failed")
                         continue
-                else:
-                    # Purely static pack sticker
-                    img = Image.open(BytesIO(sticker_data))
-                    converted = convert_to_whatsapp_static(img)
+                
+                # Safety check
+                if converted is None:
+                    logger.error(f"Sticker {i}: Conversion resulted in None, skipping")
+                    stats['skipped'] += 1
+                    stats['skipped_reasons'].append(f"Sticker {i}: conversion produced None")
+                    continue
 
                 converted_bytes = converted.getvalue()
+                
+                # CRITICAL: Verify output is actually animated (not static)
+                if should_be_animated and not _is_animated_webp_bytes(converted_bytes):
+                    logger.error(f"Sticker {i}: Conversion resulted in STATIC WebP when animated was required!")
+                    stats['skipped'] += 1
+                    stats['invalid'] += 1
+                    stats['skipped_reasons'].append(f"Sticker {i}: produced static WebP instead of animated")
+                    continue
+
+                # Hard size gate — reject anything still over 500 KB after conversion
+                if len(converted_bytes) > WA_MAX_BYTES:
+                    logger.warning(
+                        f"❌ Skipping sticker {i}/{total}: converted size "
+                        f"{len(converted_bytes) // 1024}KB exceeds WhatsApp's 500KB limit"
+                    )
+                    stats['skipped'] += 1
+                    stats['invalid'] += 1
+                    stats['skipped_reasons'].append(
+                        f"Sticker {i}: oversized after conversion ({len(converted_bytes) // 1024}KB)"
+                    )
+                    continue
+
                 is_valid, validation_reason = is_valid_webp_output(converted_bytes, require_animated=should_be_animated)
                 if not is_valid:
                     logger.warning(f"❌ Skipping sticker {i}/{total}: {validation_reason}")
@@ -981,7 +1150,7 @@ async def create_wastickers_zip(
                 logger.debug(f"Sticker {valid_count + 1} emojis: {emoji_list}")
                 
                 valid_count += 1
-                await asyncio.sleep(0.5) # Rate limiting delay
+                await asyncio.sleep(0.05) # Rate limiting delay
 
             except Exception as e:
                 logger.error(f"Error processing sticker {i} in pack {set_name}: {e}")
@@ -989,12 +1158,54 @@ async def create_wastickers_zip(
     
         if valid_count == 0:
             raise ValueError("No valid stickers found in the pack.")
+        
+        if valid_count < 3:
+            raise ValueError(f"Pack has only {valid_count} stickers. WhatsApp requires minimum 3 stickers per pack.")
+        
+        if valid_count > 30:
+            logger.warning(f"Pack has {valid_count} stickers, but WhatsApp allows maximum 30. This should have been split earlier.")
 
         # Save emoji mapping to emojis.json
         emojis_json_path = work_dir / "emojis.json"
         with open(emojis_json_path, 'w', encoding='utf-8') as f:
             json.dump(emoji_map, f, ensure_ascii=False, indent=2)
         logger.info(f"Saved emoji mappings for {len(emoji_map)} stickers")
+
+        # Create WhatsApp-compliant contents.json
+        import uuid
+        pack_identifier = uuid.uuid4().hex[:16]  # 16-char unique ID
+        stickers_array = []
+        
+        # Build stickers array with emoji mappings
+        for sticker_file, emoji_list in emoji_map.items():
+            stickers_array.append({
+                "image_file": sticker_file,
+                "emojis": emoji_list if emoji_list else ["😊"]
+            })
+        
+        contents_json = {
+            "android_play_store_link": "",
+            "ios_app_store_link": "",
+            "sticker_packs": [{
+                "identifier": pack_identifier,
+                "name": title,
+                "publisher": author,
+                "tray_image_file": "tray.png",
+                "publisher_email": "",
+                "publisher_website": "",
+                "privacy_policy_website": "",
+                "license_agreement_website": "",
+                "image_data_version": "1",
+                "avoid_cache": False,
+                "animated_sticker_pack": True,  # All our packs are animated
+                "stickers": stickers_array
+            }]
+        }
+        
+        contents_json_path = work_dir / "contents.json"
+        with open(contents_json_path, 'w', encoding='utf-8') as f:
+            json.dump(contents_json, f, ensure_ascii=False, indent=2)
+        logger.info(f"Created WhatsApp-compliant contents.json with {len(stickers_array)} stickers")
 
         # Create ZIP from folder in wasticker_packs directory
         zip_path = packs_dir / f"{set_name}.wasticker"
@@ -1244,7 +1455,7 @@ async def loadsticker_command(client: Client, message: Message):
             document=wasticker_bio,
             file_name=wasticker_name,
             caption=caption,
-            reply_markup=build_open_app_keyboard(),
+            #reply_markup=build_open_app_keyboard(),
             disable_notification=True
         )
 
@@ -1504,7 +1715,7 @@ async def process_stickers(
                     document=str(zip_path),
                     file_name=zip_path.name,
                     caption=caption,
-                    reply_markup=build_open_app_keyboard(),
+                    #reply_markup=build_open_app_keyboard(),
                     disable_notification=True
                 )
                 
@@ -1636,15 +1847,22 @@ async def convert_pack(client: Client, message: Message):
                 self.is_video = is_video
                 self.emoji = emoji
 
-        stickers = [
-            SimpleSticker(
-                s["file_id"],
-                s.get("is_animated", False),
-                s.get("is_video", False),
-                s.get("emoji", "😀")
-            )
-            for s in sticker_set["stickers"]
-        ]
+        # Create sticker list and deduplicate by file_id
+        seen_ids = set()
+        stickers = []
+        for s in sticker_set["stickers"]:
+            fid = s["file_id"]
+            if fid not in seen_ids:
+                seen_ids.add(fid)
+                stickers.append(SimpleSticker(
+                    fid,
+                    s.get("is_animated", False),
+                    s.get("is_video", False),
+                    s.get("emoji", "😀")
+                ))
+        
+        if len(seen_ids) < len(sticker_set["stickers"]):
+            logger.warning(f"Removed {len(sticker_set['stickers']) - len(seen_ids)} duplicate stickers from pack")
         
         send_to_private = "private" in message.text.lower() if message.text else False
         target_chat = message.from_user.id if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] else message.chat.id

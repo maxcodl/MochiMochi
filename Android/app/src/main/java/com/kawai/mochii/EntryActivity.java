@@ -9,6 +9,8 @@ import android.os.Looper;
 import android.util.Log;
 import android.util.Pair;
 import android.view.View;
+import android.view.animation.AlphaAnimation;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.Nullable;
@@ -23,6 +25,8 @@ public class EntryActivity extends BaseActivity {
     private static final ExecutorService executor = Executors.newCachedThreadPool();
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private View progressBar;
+    private View logoContainer;
+    private TextView errorMessageText;
     private final AtomicBoolean taskCancelled = new AtomicBoolean(false);
 
     @Override
@@ -34,6 +38,13 @@ public class EntryActivity extends BaseActivity {
             getSupportActionBar().hide();
         }
         progressBar = findViewById(R.id.entry_activity_progress);
+        logoContainer = findViewById(R.id.logo_container);
+        errorMessageText = findViewById(R.id.error_message);
+
+        // Simple fade in animation for the logo
+        AlphaAnimation fadeIn = new AlphaAnimation(0.0f, 1.0f);
+        fadeIn.setDuration(800);
+        logoContainer.startAnimation(fadeIn);
 
         // Handle incoming .wasticker share intent
         Intent intent = getIntent();
@@ -69,9 +80,25 @@ public class EntryActivity extends BaseActivity {
     private void showErrorMessage(String errorMessage) {
         progressBar.setVisibility(View.GONE);
         Log.e("EntryActivity", "error fetching sticker packs, " + errorMessage);
-        // When no packs found, go to list activity with empty list for empty state
+        
+        if (errorMessageText != null) {
+            errorMessageText.setText(getString(R.string.error_loading_packs, errorMessage));
+            errorMessageText.setVisibility(View.VISIBLE);
+            
+            // Delay the transition if there's an error so the user can see it briefly
+            mainHandler.postDelayed(() -> {
+                if (!isFinishing()) {
+                    navigateToMain(new ArrayList<>());
+                }
+            }, 3000);
+        } else {
+            navigateToMain(new ArrayList<>());
+        }
+    }
+
+    private void navigateToMain(ArrayList<StickerPack> stickerPackList) {
         final Intent intent = new Intent(this, StickerPackListActivity.class);
-        intent.putParcelableArrayListExtra(StickerPackListActivity.EXTRA_STICKER_PACK_LIST_DATA, new ArrayList<>());
+        intent.putParcelableArrayListExtra(StickerPackListActivity.EXTRA_STICKER_PACK_LIST_DATA, stickerPackList);
         startActivity(intent);
         finish();
         overridePendingTransition(0, 0);
@@ -129,6 +156,13 @@ public class EntryActivity extends BaseActivity {
             Pair<String, ArrayList<StickerPack>> result;
             try {
                 WastickerParser.importStickerPack(activity, uri);
+                
+                // Invalidate the cache after importing
+                StickerContentProvider provider = StickerContentProvider.getInstance();
+                if (provider != null) {
+                    provider.invalidateStickerPackList();
+                }
+
                 ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(activity);
                 result = new Pair<>(null, packs);
             } catch (Exception e) {
@@ -140,7 +174,6 @@ public class EntryActivity extends BaseActivity {
                 EntryActivity act = ref.get();
                 if (act == null) return;
                 if (finalResult.first != null) {
-                    Toast.makeText(act, "Import error: " + finalResult.first, Toast.LENGTH_LONG).show();
                     act.showErrorMessage(finalResult.first);
                 } else {
                     Toast.makeText(act, "Sticker pack imported!", Toast.LENGTH_SHORT).show();

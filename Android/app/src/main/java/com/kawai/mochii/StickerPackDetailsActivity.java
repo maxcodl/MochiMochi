@@ -63,6 +63,10 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_sticker_pack_details);
+
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        setSupportActionBar(toolbar);
+
         boolean showUpButton = getIntent().getBooleanExtra(EXTRA_SHOW_UP_BUTTON, false);
         stickerPack = getIntent().getParcelableExtra(EXTRA_STICKER_PACK_DATA);
 
@@ -91,7 +95,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         
         int count = stickerPack.getStickers() != null ? stickerPack.getStickers().size() : 0;
         String countStr = getResources().getString(R.string.sticker_count, count);
-        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + " • " + countStr);
+        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + "  " + countStr);
 
         addButton.setOnClickListener(v -> addStickerPackToWhatsApp(stickerPack.identifier, stickerPack.name));
 
@@ -126,6 +130,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                             String error;
                             try {
                                 WastickerParser.deleteStickerPack(ref.get(), packId);
+                                StickerContentProvider provider = StickerContentProvider.getInstance();
+                                if (provider != null) provider.invalidateStickerPackList();
                                 error = null;
                             } catch (Exception e) {
                                 error = e.getMessage();
@@ -200,7 +206,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         
         int count = stickerPack.getStickers() != null ? stickerPack.getStickers().size() : 0;
         String countStr = getResources().getString(R.string.sticker_count, count);
-        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + " • " + countStr);
+        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + "  " + countStr);
 
         findViewById(R.id.sticker_pack_animation_indicator).setVisibility(stickerPack.animatedStickerPack ? View.VISIBLE : View.GONE);
         

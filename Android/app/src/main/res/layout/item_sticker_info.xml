@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
     android:gravity="center_vertical"
-    android:paddingStart="0dp"
-    android:paddingEnd="0dp"
-    android:paddingTop="10dp"
-    android:paddingBottom="10dp">
+    android:orientation="horizontal"
+    android:paddingTop="12dp"
+    android:paddingBottom="12dp">
 
     <!-- Sticker preview -->
     <com.facebook.drawee.view.SimpleDraweeView
         android:id="@+id/sticker_info_preview"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
-        android:layout_marginEnd="14dp" />
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:layout_marginEnd="16dp"
+        tools:src="@drawable/sticker_error" />
 
     <!-- Text details -->
     <LinearLayout
@@ -27,51 +27,79 @@
             android:id="@+id/sticker_info_name"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="13sp"
-            android:textColor="?attr/colorOnSurface"
+            android:ellipsize="end"
             android:fontFamily="monospace"
             android:singleLine="true"
-            android:ellipsize="end" />
+            android:textColor="?attr/colorOnSurface"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            tools:text="sticker_sample.webp" />
 
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:layout_marginTop="3dp">
+            android:layout_marginTop="4dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <!-- Type badge -->
             <TextView
                 android:id="@+id/sticker_info_type"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:textSize="10sp"
-                android:textColor="?attr/colorOnSecondaryContainer"
+                android:layout_marginEnd="8dp"
                 android:background="@drawable/badge_bg"
-                android:paddingStart="6dp"
-                android:paddingEnd="6dp"
+                android:paddingLeft="6dp"
                 android:paddingTop="1dp"
+                android:paddingRight="6dp"
                 android:paddingBottom="1dp"
-                android:layout_marginEnd="6dp" />
+                android:textColor="?attr/colorOnSecondaryContainer"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                tools:text="WEBP" />
+
+            <!-- Dimension (e.g. 512x512) -->
+            <TextView
+                android:id="@+id/sticker_info_dimens"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="12sp"
+                tools:text="512x512" />
 
             <!-- File size -->
             <TextView
                 android:id="@+id/sticker_info_size"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:textColor="?attr/colorOnSurfaceVariant"
                 android:textSize="12sp"
-                android:textColor="?attr/colorOnSurfaceVariant" />
+                tools:text="48 KB" />
 
         </LinearLayout>
 
-        <!-- Frame info (for animated) -->
+        <!-- Color / Alpha Info -->
+        <TextView
+            android:id="@+id/sticker_info_color"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="12sp"
+            tools:text="RGBA (8-bit)" />
+
+        <!-- Animation / Frame info -->
         <TextView
             android:id="@+id/sticker_info_frames"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:textSize="11sp"
-            android:textColor="?attr/colorOnSurfaceVariant"
             android:layout_marginTop="2dp"
-            android:visibility="gone" />
+            android:textColor="?attr/colorOnSurfaceVariant"
+            android:textSize="12sp"
+            android:visibility="gone"
+            tools:text="30 frames  24 fps"
+            tools:visibility="visible" />
 
     </LinearLayout>
 </LinearLayout>
