@@ -11,6 +11,7 @@ package com.kawai.mochi;
 import android.app.Application;
 
 import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.imagepipeline.core.DefaultExecutorSupplier;
 import com.facebook.imagepipeline.core.ImagePipelineConfig;
 
 public class StickerApplication extends Application {
@@ -23,6 +24,7 @@ public class StickerApplication extends Application {
         ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
                 .setDownsampleEnabled(true) // Crucial for performance: scales images at decode time
                 .setDiskCacheEnabled(true)
+                .setExecutorSupplier(new DefaultExecutorSupplier(1)) // Limit concurrent decode threads
                 .build();
         Fresco.initialize(this, config);
 

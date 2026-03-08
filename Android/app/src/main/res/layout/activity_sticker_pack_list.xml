@@ -42,8 +42,7 @@
         android:gravity="center"
         android:orientation="vertical"
         android:padding="32dp"
-        android:visibility="gone"
-        tools:visibility="visible">
+        android:visibility="gone">
 
         <ImageView
             android:layout_width="120dp"
@@ -101,6 +100,8 @@
         android:layout_margin="16dp"
         android:text="Import"
         app:icon="@drawable/ic_fab_add"
+        app:iconGravity="textStart"
+        android:padding="0dp"
         android:visibility="gone"
         tools:visibility="visible"/>
 

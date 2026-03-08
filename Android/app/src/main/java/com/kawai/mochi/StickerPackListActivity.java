@@ -267,27 +267,42 @@ public class StickerPackListActivity extends AddStickerPackActivity {
         whitelistCheckCancelled = true;
     }
 
+    private android.view.ViewTreeObserver.OnGlobalLayoutListener globalLayoutListener;
+
     private void showStickerPackList(List<StickerPack> stickerPackList) {
         allStickerPacksListAdapter = new StickerPackListAdapter(stickerPackList, onAddButtonClickedListener);
         packRecyclerView.setAdapter(allStickerPacksListAdapter);
         packLayoutManager = new LinearLayoutManager(this);
         packLayoutManager.setOrientation(RecyclerView.VERTICAL);
         packRecyclerView.setLayoutManager(packLayoutManager);
-        packRecyclerView.getViewTreeObserver().addOnGlobalLayoutListener(this::recalculateColumnCount);
+        // Increase off-screen view cache to avoid rebinds while flinging
+        packRecyclerView.setItemViewCacheSize(12);
+        globalLayoutListener = this::recalculateColumnCount;
+        packRecyclerView.getViewTreeObserver().addOnGlobalLayoutListener(globalLayoutListener);
     }
 
     private final StickerPackListAdapter.OnAddButtonClickedListener onAddButtonClickedListener = pack -> addStickerPackToWhatsApp(pack.identifier, pack.name);
 
     private void recalculateColumnCount() {
+        final int rvWidth = packRecyclerView.getWidth();
+        if (rvWidth <= 0) return; // RecyclerView not measured yet — wait for next pass
+
+        // imageRowView width = rvWidth - card margins (12dp×2) - ConstraintLayout padding (16dp×2) - add button (48dp)
+        // This avoids the chicken-and-egg where imageRowView.width==0 because it is GONE until maxColumns is set.
+        final float density = getResources().getDisplayMetrics().density;
+        final int overhead = Math.round((12 + 12 + 16 + 16 + 48) * density);
+        final int imageRowWidth = rvWidth - overhead;
+        if (imageRowWidth <= 0) return;
+
         final int previewSize = getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
-        int firstVisibleItemPosition = packLayoutManager.findFirstVisibleItemPosition();
-        StickerPackListItemViewHolder viewHolder = (StickerPackListItemViewHolder) packRecyclerView.findViewHolderForAdapterPosition(firstVisibleItemPosition);
-        if (viewHolder != null) {
-            final int widthOfImageRow = viewHolder.imageRowView.getMeasuredWidth();
-            final int max = Math.max(widthOfImageRow / previewSize, 1);
-            int maxNumberOfImagesInARow = Math.min(STICKER_PREVIEW_DISPLAY_LIMIT, max);
-            int minMarginBetweenImages = (widthOfImageRow - maxNumberOfImagesInARow * previewSize) / (maxNumberOfImagesInARow - 1);
-            allStickerPacksListAdapter.setImageRowSpec(maxNumberOfImagesInARow, minMarginBetweenImages);
+        int maxNumberOfImagesInARow = Math.min(STICKER_PREVIEW_DISPLAY_LIMIT, Math.max(imageRowWidth / previewSize, 1));
+        int minMarginBetweenImages = maxNumberOfImagesInARow > 1
+                ? (imageRowWidth - maxNumberOfImagesInARow * previewSize) / (maxNumberOfImagesInARow - 1)
+                : 0;
+        allStickerPacksListAdapter.setImageRowSpec(maxNumberOfImagesInARow, minMarginBetweenImages);
+        // Remove after first valid measurement — layout width won't change
+        if (packRecyclerView.getViewTreeObserver().isAlive()) {
+            packRecyclerView.getViewTreeObserver().removeOnGlobalLayoutListener(globalLayoutListener);
         }
     }
 

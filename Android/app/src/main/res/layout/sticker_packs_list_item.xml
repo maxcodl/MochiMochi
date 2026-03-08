@@ -21,12 +21,20 @@
         android:layout_height="wrap_content"
         android:padding="16dp">
 
-        <!-- Add Button (End) -->
+        <!-- Add Button (End) - Fixed alignment by using specific IconButton style and centering icon -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/add_button_on_list"
             style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
             android:layout_width="48dp"
             android:layout_height="48dp"
+            android:insetLeft="0dp"
+            android:insetTop="0dp"
+            android:insetRight="0dp"
+            android:insetBottom="0dp"
+            android:padding="0dp"
+            app:iconPadding="0dp"
+            android:gravity="center"
+            app:iconGravity="textStart"
             android:contentDescription="@string/add_button_content_description"
             app:icon="@drawable/sticker_3rdparty_add"
             app:iconSize="24dp"
@@ -117,20 +125,19 @@
 
         </LinearLayout>
 
-        <!-- Horizontal Image Previews -->
-        <LinearLayout
+        <!-- Horizontal Image Previews - Performance Optimized with RecyclerView -->
+        <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/sticker_packs_list_item_image_list"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:gravity="center_vertical"
             android:orientation="horizontal"
+            app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
             app:layout_constraintEnd_toStartOf="@id/add_button_on_list"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/metadata_container"
-            tools:minHeight="44dp">
-            <!-- SimpleDraweeViews are added dynamically here -->
-        </LinearLayout>
+            tools:listitem="@layout/sticker_packs_list_image_item"
+            tools:minHeight="44dp" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

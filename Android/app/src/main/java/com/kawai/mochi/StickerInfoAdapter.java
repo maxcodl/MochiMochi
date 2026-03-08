@@ -64,9 +64,13 @@ public class StickerInfoAdapter extends RecyclerView.Adapter<StickerInfoAdapter.
         // PERFORMANCE: Resize animation to match the 64dp display size
         final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_info_preview_size);
         Uri contentUri = StickerPackLoader.getStickerAssetUri(packId, sticker.imageFileName);
+        // Use cached info if available; animated stickers decode at 75% of display size
+        WebPInfo cached = infoCache.get(stickerFile.getAbsolutePath());
+        int baseSize = previewSize > 0 ? previewSize : 128;
+        int infoRenderSize = (cached != null && cached.isAnimated) ? (int) (baseSize * 0.40f) : baseSize;
         
         ImageRequest request = ImageRequestBuilder.newBuilderWithSource(contentUri)
-                .setResizeOptions(new ResizeOptions(previewSize > 0 ? previewSize : 128, previewSize > 0 ? previewSize : 128))
+                .setResizeOptions(new ResizeOptions(infoRenderSize, infoRenderSize))
                 .build();
 
         DraweeController controller = Fresco.newDraweeControllerBuilder()
