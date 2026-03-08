@@ -129,7 +129,7 @@
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/sticker_packs_list_item_image_list"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="@dimen/sticker_pack_list_item_preview_image_size"
             android:layout_marginTop="12dp"
             android:orientation="horizontal"
             app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
