@@ -1,17 +1,9 @@
+<div align="center">
 
 # MochiMochi ジ
 
 **A cozy sticker manager for WhatsApp — import from Telegram in seconds.**
 
-
-## ✨ Screenshots
-
-<img src="https://github.com/user-attachments/assets/4bc78d5c-29e0-431c-acac-41c42b667565" width="300">    <img src="https://github.com/user-attachments/assets/eb47af3e-8e22-4c77-a83e-91ca9765e386" width="300"> 
-
-
-
-
-<div align="center  
 ![Platform](https://img.shields.io/badge/platform-Android-green?style=flat-square)
 ![Min SDK](https://img.shields.io/badge/minSdk-21-blue?style=flat-square)
 ![License](https://img.shields.io/badge/license-BSD-orange?style=flat-square)
@@ -31,6 +23,12 @@
 - **No ads, no tracking** — completely local, nothing leaves your device
 
 ---
+
+
+## ✨ Screenshots
+<div align="center">
+<img src="https://github.com/user-attachments/assets/4bc78d5c-29e0-431c-acac-41c42b667565" width="300">    <img src="https://github.com/user-attachments/assets/eb47af3e-8e22-4c77-a83e-91ca9765e386" width="300"> 
+</div>
 
 ## 📦 Installation
 
