@@ -39,7 +39,7 @@
 ```
 Android/
 └── app/src/main/
-    ├── java/com/kawai/mochii/
+    ├── java/com/kawai/mochi/
     │   ├── StickerPackListActivity.java   # Home screen — list of all packs
     │   ├── StickerPackDetailsActivity.java # Pack details + sticker grid
     │   ├── StickerPackInfoActivity.java   # Per-pack metadata + sticker list
@@ -60,11 +60,13 @@ Android/
 ## 🤖 Telegram Bot (companion)
 
 The repo also includes a Python Telegram bot (`tg-wa.py`) that:
+
 - Accepts forwarded Telegram sticker packs
 - Converts them to `.wasticker` format (static → WebP, animated → animated WebP)
 - Sends the ready-to-import file back to the user
 
 **Setup:**
+
 ```bash
 cp .env.example .env   # fill in your bot token and API keys
 pip install -r requirements.txt
@@ -77,12 +79,12 @@ python tg-wa.py
 
 Three modes available in **Settings → Theme**:
 
-| Mode | Description |
-|------|-------------|
-| System Default | Follows Android system dark/light setting |
-| Light | Always light |
-| Dark | Material dark surfaces |
-| AMOLED Dark | True black — battery friendly on OLED screens |
+| Mode           | Description                                   |
+| -------------- | --------------------------------------------- |
+| System Default | Follows Android system dark/light setting     |
+| Light          | Always light                                  |
+| Dark           | Material dark surfaces                        |
+| AMOLED Dark    | True black — battery friendly on OLED screens |
 
 All modes use **Material You / Monet** dynamic colours where supported (Android 12+).
 
@@ -92,13 +94,13 @@ All modes use **Material You / Monet** dynamic colours where supported (Android 
 
 If MochiMochi saved you from manually screenshotting stickers like a caveman, consider supporting:
 
-> **[Donate $69](https://github.com)** — or send your kidney to Max ❤️
+> **[Donate $69](https://github.com/maxcodl/MochiMochi)** — or send your kidney to Max ❤️
 
 ---
 
 ## 📄 License
 
-BSD 3-Clause — see [LICENSE](../LICENSE) for details.
+BSD 3-Clause — see [LICENSE](https://github.com/maxcodl/MochiMochi?tab=License-1-ov-file) for details.
 
 ---
 

@@ -8,59 +8,58 @@
 
 package com.kawai.mochi;
 
-import android.app.Dialog;
 import android.os.Bundle;
-
 import androidx.annotation.NonNull;
 import androidx.annotation.StringRes;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
+import androidx.core.view.WindowCompat;
 import androidx.fragment.app.DialogFragment;
 
 import com.google.android.material.color.DynamicColors;
+import com.kawai.mochi.R;
 
 public abstract class BaseActivity extends AppCompatActivity {
 
-    // Track the theme state when this activity instance was created so we can
-    // detect changes while the activity was in the back stack.
-    private boolean mCreatedWithAmoled;
-    private int mCreatedWithThemeMode;
+    protected boolean mCreatedWithAmoled;
+    protected int mCreatedWithThemeMode;
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
         android.content.SharedPreferences prefs = getSharedPreferences("mochii_prefs", MODE_PRIVATE);
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
-        int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        int themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
 
-        // Remember what theme we were created with
         mCreatedWithAmoled = isAmoled;
         mCreatedWithThemeMode = themeMode;
 
         if (isAmoled) {
-            // 1. Set the AMOLED base theme (black surfaces, DayNight parent)
             setTheme(R.style.AppTheme_Amoled);
-            // 2. Apply Monet dynamic colors (same as normal mode — no overlay here)
             DynamicColors.applyToActivityIfAvailable(this);
-            // 3. Re-apply the AMOLED surface overrides ON TOP of Monet so surfaces stay black
-            //    while Monet accent colors (primary, secondary, etc.) remain intact.
             getTheme().applyStyle(R.style.ThemeOverlay_Amoled, true);
         } else {
-            // Normal mode: let DynamicColors freely apply all Monet attributes.
             DynamicColors.applyToActivityIfAvailable(this);
         }
         super.onCreate(savedInstanceState);
+
+        // Enable edge-to-edge drawing globally. 
+        // Specific layouts must handle padding via android:fitsSystemWindows="true" 
+        // or WindowInsets listeners.
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        // When returning from the back stack, check if the theme changed.
-        // AppCompatDelegate handles Light/Dark propagation automatically, but AMOLED
-        // is a custom pref — activities that were paused won't know about it.
         android.content.SharedPreferences prefs = getSharedPreferences("mochii_prefs", MODE_PRIVATE);
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
-        int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        int themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        
+        // Only recreate if we're not mid-recreation and values actually differ
         if (isAmoled != mCreatedWithAmoled || themeMode != mCreatedWithThemeMode) {
+            mCreatedWithAmoled = isAmoled;
+            mCreatedWithThemeMode = themeMode;
             recreate();
         }
     }
@@ -86,7 +85,7 @@ public abstract class BaseActivity extends AppCompatActivity {
 
         @NonNull
         @Override
-        public Dialog onCreateDialog(Bundle savedInstanceState) {
+        public android.app.Dialog onCreateDialog(Bundle savedInstanceState) {
             @StringRes final int title = getArguments().getInt(ARG_TITLE_ID);
             String message = getArguments().getString(ARG_MESSAGE);
 

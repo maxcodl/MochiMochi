@@ -166,4 +166,34 @@ public class StickerProcessor {
         } catch (Exception e) { Log.e(TAG, "Strip failed", e); }
         return false;
     }
+
+    public static void createThumbnail(File sourceFile, File destFile) throws IOException {
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), options);
+
+        options.inSampleSize = calculateInSampleSize(options, 128, 128);
+        options.inJustDecodeBounds = false;
+
+        Bitmap thumb = BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), options);
+        if (thumb != null) {
+            Bitmap result = transform(thumb, 128);
+            saveAsWebP(result, destFile, 75);
+            result.recycle();
+        }
+    }
+
+    private static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
+        final int height = options.outHeight;
+        final int width = options.outWidth;
+        int inSampleSize = 1;
+        if (height > reqHeight || width > reqWidth) {
+            final int halfHeight = height / 2;
+            final int halfWidth = width / 2;
+            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2;
+            }
+        }
+        return inSampleSize;
+    }
 }

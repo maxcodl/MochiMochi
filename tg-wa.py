@@ -59,7 +59,7 @@ app = Client(
 # Authorized chats mechanism (whitelist for groups)
 BASE_DIR = Path(__file__).resolve().parent
 AUTHORIZED_CHATS_FILE = BASE_DIR / 'authorized_chats.json'
-APP_PLAYSTORE_URL = "http://github.com/maxcodl/MochiMochi/releases/"
+APP_URL = "http://github.com/maxcodl/MochiMochi/releases/"
 try:
     with open(AUTHORIZED_CHATS_FILE, 'r') as f:
         AUTHORIZED_CHATS = set(json.load(f))
@@ -123,7 +123,7 @@ def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
 
 def build_open_app_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Install / Update App", url=APP_PLAYSTORE_URL)]
+        [InlineKeyboardButton("Install / Update App", url=APP_URL)]
     ])
 
 
@@ -137,8 +137,13 @@ def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[b
         with Image.open(BytesIO(data)) as check:
             if check.width != 512 or check.height != 512:
                 return False, f"Invalid dimensions {check.width}x{check.height}, expected 512x512"
-            if require_animated and not _is_animated_webp_bytes(data):
-                return False, "Expected animated WebP but got static output"
+            if require_animated:
+                if not _is_animated_webp_bytes(data):
+                    return False, "Expected animated WebP but got static output"
+                # Count ANMF frames — WhatsApp requires >= 2 for animated packs
+                frame_count = _count_webp_frames(data)
+                if frame_count < 2:
+                    return False, f"Animated WebP has only {frame_count} frame(s); WhatsApp requires >= 2"
     except Exception as e:
         return False, f"Cannot decode converted WebP: {e}"
 
@@ -278,30 +283,49 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
                     raise Exception(f"lottie cairo render failed: {e}")
             else:
                 # WebM / video sticker — extract first frame via ffmpeg, keeping alpha plane.
+                # IMPORTANT: must use '-c:v libvpx-vp9' (software decoder) because the
+                # hardware VP9 decoder does not expose the VP9 alpha plane, causing a black
+                # background. libvpx-vp9 correctly decodes both the RGB and alpha streams.
                 logger.info("Extracting first frame from animated sticker for tray icon")
                 with tempfile.TemporaryDirectory() as tmpdir:
                     tmppath = Path(tmpdir)
                     input_path = tmppath / "input.webm"
                     input_path.write_bytes(tray_data)
                     output_path = tmppath / "frame.png"
-                    cmd = [
-                        'ffmpeg',
-                        '-i', str(input_path),
-                        '-vf', r'select=eq(n\,0)',
-                        '-frames:v', '1',
-                        '-pix_fmt', 'rgba',
-                        '-y',
-                        str(output_path)
-                    ]
-                    result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
-                    if result.returncode == 0 and output_path.exists():
-                        with open(output_path, 'rb') as f:
-                            frame_data = f.read()
-                        img = Image.open(BytesIO(frame_data)).copy()
-                        logger.info("Successfully extracted first frame for tray icon")
-                    else:
-                        logger.warning(f"Failed to extract frame, creating placeholder: {result.stderr}")
-                        raise Exception("Frame extraction failed")
+
+                    img = None
+                    # Try Pillow first — handles animated WebP natively with correct alpha
+                    try:
+                        tmp_img = Image.open(BytesIO(tray_data))
+                        tmp_img.seek(0)
+                        img = tmp_img.copy()
+                        logger.info("Opened animated sticker first frame via Pillow for tray icon")
+                    except Exception:
+                        img = None
+
+                    if img is None:
+                        # Fall back to ffmpeg; try libvpx-vp9 first (exposes VP9 alpha plane),
+                        # then retry without decoder override for non-VP9 formats.
+                        for decoder_args in (['-c:v', 'libvpx-vp9'], []):
+                            cmd = [
+                                'ffmpeg', '-y',
+                                *decoder_args,
+                                '-i', str(input_path),
+                                '-vf', r'select=eq(n\,0),format=rgba',
+                                '-frames:v', '1',
+                                '-vsync', 'vfr',
+                                str(output_path)
+                            ]
+                            result = subprocess.run(cmd, capture_output=True, text=True, shell=False)
+                            if result.returncode == 0 and output_path.exists():
+                                with open(output_path, 'rb') as f:
+                                    frame_data = f.read()
+                                img = Image.open(BytesIO(frame_data)).copy()
+                                logger.info("Successfully extracted first frame for tray icon")
+                                break
+                        else:
+                            logger.warning(f"Failed to extract frame: {result.stderr}")
+                            raise Exception("Frame extraction failed")
         else:
             img = Image.open(BytesIO(tray_data)).copy()
 
@@ -706,9 +730,9 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         target_fps = max(target_fps, 8.0)
         frame_duration_ms = max(8, int(1000.0 / target_fps))
         
-        # Don't use duration to calculate max_frames - it's unreliable
-        # WhatsApp max: 10s; with 24fps ceiling this is 240 frames.
-        max_frames = 240
+        # Cap frames so total animation duration never exceeds WhatsApp's 10-second limit.
+        # (duration metadata in WebM stickers is unreliable, so we cap by frame count instead.)
+        max_frames = min(240, int(10000 / frame_duration_ms))
 
         # --- 2. Extract frames as RGBA PNG using ffmpeg ---
         # Force -c:v libvpx-vp9 (software decoder) — same as sticker-convert's
@@ -752,8 +776,12 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
             except Exception as fe:
                 logger.warning(f"Skipping frame {ff.name}: {fe}")
 
-        if len(pil_frames) < 2:
-            raise Exception(f"Too few valid frames ({len(pil_frames)}) for animation")
+        if len(pil_frames) == 0:
+            raise Exception("No valid frames could be decoded from video")
+        if len(pil_frames) == 1:
+            # Single-frame video sticker — duplicate frame so WhatsApp accepts it as animated
+            logger.warning("Video sticker has only 1 frame; duplicating to satisfy WhatsApp animated requirement")
+            pil_frames = pil_frames * 2
 
         # --- 4. Encode animated WebP using shared helper ---
         # Uses finer quality steps + frame decimation to guarantee ≤500KB
@@ -814,6 +842,20 @@ def _is_animated_webp_bytes(data: bytes) -> bool:
     
     # If neither VP8X with anim flag nor ANIM chunk found, it's static
     return False
+
+
+def _count_webp_frames(data: bytes) -> int:
+    """Count the number of ANMF frames in an animated WebP. Returns 1 for static WebP."""
+    import struct as _struct
+    count = 0
+    pos = 12
+    while pos + 8 <= len(data):
+        cid = data[pos:pos+4]
+        csz = _struct.unpack_from('<I', data, pos+4)[0]
+        if cid == b'ANMF':
+            count += 1
+        pos += 8 + csz + (csz & 1)
+    return count if count > 0 else 1
 
 
 def split_stickers_by_type(stickers: list):
@@ -1011,13 +1053,20 @@ async def create_wastickers_zip(
                             animated_out = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
                             converted_bytes = animated_out.getvalue()
                             if not _is_animated_webp_bytes(converted_bytes):
-                                return {
-                                    'index': i,
-                                    'ok': False,
-                                    'reason': 'conversion produced static instead of animated',
-                                    'kind': 'invalid',
-                                    'warnings': verification['warnings'],
-                                }
+                                # Fallback: wrap static output as a 2-frame animation
+                                logger.warning(f"Sticker {i}: animated conversion produced static output — wrapping as 1-frame animation")
+                                try:
+                                    img = Image.open(BytesIO(converted_bytes))
+                                    fallback_out = await _run_cpu_bound(convert_to_whatsapp_one_frame_animation, img)
+                                    converted_bytes = fallback_out.getvalue()
+                                except Exception as fe:
+                                    return {
+                                        'index': i,
+                                        'ok': False,
+                                        'reason': f'conversion produced static and 1-frame fallback failed: {fe}',
+                                        'kind': 'invalid',
+                                        'warnings': verification['warnings'],
+                                    }
                         except Exception:
                             return {
                                 'index': i,
@@ -1027,13 +1076,21 @@ async def create_wastickers_zip(
                                 'warnings': verification['warnings'],
                             }
                     elif should_be_animated:
-                        return {
-                            'index': i,
-                            'ok': False,
-                            'reason': 'static sticker in animated pack',
-                            'kind': 'invalid',
-                            'warnings': verification['warnings'],
-                        }
+                        # Static sticker in a mixed pack — wrap as a 2-frame animation so it
+                        # satisfies WhatsApp's animated_sticker_pack requirement.
+                        logger.info(f"Sticker {i}/{total}: static sticker in animated pack — converting to 1-frame animation")
+                        try:
+                            img = Image.open(BytesIO(sticker_data))
+                            fallback_out = await _run_cpu_bound(convert_to_whatsapp_one_frame_animation, img)
+                            converted_bytes = fallback_out.getvalue()
+                        except Exception as fe:
+                            return {
+                                'index': i,
+                                'ok': False,
+                                'reason': f'static-to-animated fallback failed: {fe}',
+                                'kind': 'invalid',
+                                'warnings': verification['warnings'],
+                            }
                     else:
                         try:
                             converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)

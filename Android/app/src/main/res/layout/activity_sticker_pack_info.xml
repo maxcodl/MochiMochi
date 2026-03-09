@@ -4,13 +4,15 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?attr/colorSurface">
+    android:background="?attr/colorSurface"
+    android:fitsSystemWindows="true">
 
     <com.google.android.material.appbar.AppBarLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="?attr/colorSurface"
-        app:elevation="0dp">
+        app:elevation="0dp"
+        app:liftOnScroll="true">
 
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
@@ -29,12 +31,12 @@
             <com.google.android.material.tabs.TabItem
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Pack Summary" />
+                android:text="@string/pack_summary" />
 
             <com.google.android.material.tabs.TabItem
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Sticker Details" />
+                android:text="@string/sticker_details" />
         </com.google.android.material.tabs.TabLayout>
     </com.google.android.material.appbar.AppBarLayout>
 
@@ -68,7 +70,7 @@
                         android:layout_width="64dp"
                         android:layout_height="64dp"
                         android:adjustViewBounds="true"
-                        android:contentDescription="Tray icon"
+                        android:contentDescription="@string/info_screen_tray_icon"
                         tools:src="@mipmap/ic_launcher_round" />
 
                     <LinearLayout
@@ -110,7 +112,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginBottom="12dp"
                     android:letterSpacing="0.1"
-                    android:text="PACK DIAGNOSTICS"
+                    android:text="@string/pack_diagnostics_header"
                     android:textAllCaps="true"
                     android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="11sp" />
@@ -125,7 +127,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Status"
+                        android:text="@string/status_label"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
 
@@ -148,7 +150,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Composition"
+                        android:text="@string/composition_label"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
 
@@ -171,7 +173,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Total Data Size"
+                        android:text="@string/total_data_size_label"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
 
@@ -194,7 +196,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="Unique Identifier"
+                        android:text="@string/unique_identifier_label"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="14sp" />
 
@@ -227,7 +229,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginBottom="8dp"
                         android:letterSpacing="0.1"
-                        android:text="LINKS"
+                        android:text="@string/links_header"
                         android:textAllCaps="true"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="11sp" />
@@ -237,7 +239,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:padding="8dp"
-                        android:text="🌐  Website"
+                        android:text="@string/website_link"
                         android:textColor="?attr/colorPrimary"
                         android:textSize="14sp"
                         android:visibility="gone"
@@ -248,7 +250,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:padding="8dp"
-                        android:text="✉  Email"
+                        android:text="@string/email_link"
                         android:textColor="?attr/colorPrimary"
                         android:textSize="14sp"
                         android:visibility="gone"
@@ -259,7 +261,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:padding="8dp"
-                        android:text="🔒  Privacy Policy"
+                        android:text="@string/privacy_policy_link"
                         android:textColor="?attr/colorPrimary"
                         android:textSize="14sp"
                         android:visibility="gone"
@@ -270,7 +272,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:padding="8dp"
-                        android:text="📄  License Agreement"
+                        android:text="@string/license_agreement_link"
                         android:textColor="?attr/colorPrimary"
                         android:textSize="14sp"
                         android:visibility="gone"

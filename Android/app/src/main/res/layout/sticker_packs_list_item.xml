@@ -7,45 +7,32 @@
     android:layout_height="wrap_content"
     android:layout_marginHorizontal="12dp"
     android:layout_marginVertical="6dp"
+    android:clickable="true"
+    android:focusable="true"
+    android:contentDescription="@string/more_info_button"
     app:cardCornerRadius="16dp"
     app:cardElevation="0dp"
     app:strokeWidth="1dp"
     app:strokeColor="?attr/colorOutlineVariant"
-    app:cardBackgroundColor="?attr/colorSurfaceContainerLow"
-    android:focusable="true"
-    android:clickable="true"
-    android:foreground="?android:attr/selectableItemBackground">
+    app:cardBackgroundColor="?attr/colorSurfaceContainerLow">
 
     <androidx.constraintlayout.widget.ConstraintLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:padding="16dp">
 
-        <!-- Add Button (End) -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/add_button_on_list"
-            style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:contentDescription="@string/add_button_content_description"
-            app:icon="@drawable/sticker_3rdparty_add"
-            app:iconSize="24dp"
-            app:layout_constraintBottom_toBottomOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent" />
-
         <!-- Sticker Pack Title -->
         <TextView
             android:id="@+id/sticker_pack_title"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginEnd="8dp"
+            android:layout_marginEnd="56dp"
             android:ellipsize="end"
             android:maxLines="1"
             android:textColor="?attr/colorOnSurface"
             android:textSize="18sp"
             android:textStyle="bold"
-            app:layout_constraintEnd_toStartOf="@+id/add_button_on_list"
+            app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent"
             tools:text="Pusheen Sticker Pack" />
@@ -118,19 +105,51 @@
         </LinearLayout>
 
         <!-- Horizontal Image Previews -->
-        <LinearLayout
+        <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/sticker_packs_list_item_image_list"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="@dimen/sticker_pack_list_item_preview_image_size"
             android:layout_marginTop="12dp"
-            android:gravity="center_vertical"
             android:orientation="horizontal"
+            android:contentDescription="@string/stickers_label"
+            app:layoutManager="androidx.recyclerview.widget.LinearLayoutManager"
             app:layout_constraintEnd_toStartOf="@id/add_button_on_list"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/metadata_container"
-            tools:minHeight="44dp">
-            <!-- SimpleDraweeViews are added dynamically here -->
-        </LinearLayout>
+            tools:listitem="@layout/sticker_packs_list_image_item" />
+
+        <!-- Add Button (End) -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/add_button_on_list"
+            style="@style/Widget.Material3.Button.IconButton.Filled.Tonal"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:insetLeft="0dp"
+            android:insetTop="0dp"
+            android:insetRight="0dp"
+            android:insetBottom="0dp"
+            android:padding="0dp"
+            app:iconPadding="0dp"
+            android:gravity="center"
+            app:iconGravity="textStart"
+            android:contentDescription="@string/add_button_content_description"
+            app:icon="@drawable/sticker_3rdparty_add"
+            app:iconSize="24dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <View
+            android:id="@+id/details_clickable_area"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:background="?attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toStartOf="@id/add_button_on_list"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>
 

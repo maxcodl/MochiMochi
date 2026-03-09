@@ -7,14 +7,12 @@ import android.os.Handler;
 import android.os.Looper;
 import android.widget.Toast;
 
-import androidx.appcompat.app.AppCompatActivity;
-
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.kawai.mochi.R;
 
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -25,7 +23,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class ImportIndividualStickerActivity extends BaseActivity {
-    private static final String TAG = "ImportIndividual";
     private static final ExecutorService executor = Executors.newCachedThreadPool();
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -43,7 +40,7 @@ public class ImportIndividualStickerActivity extends BaseActivity {
         }
 
         if (uri == null) {
-            Toast.makeText(this, "No file provided", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, R.string.no_file_provided, Toast.LENGTH_SHORT).show();
             finish();
             return;
         }
@@ -68,14 +65,14 @@ public class ImportIndividualStickerActivity extends BaseActivity {
             ExtractResult result = extractSticker(activity, uri);
             mainHandler.post(() -> {
                 ImportIndividualStickerActivity act = ref.get();
-                if (act == null || result == null) return;
+                if (act == null) return;
                 if (result.error != null) {
-                    Toast.makeText(act, "Error: " + result.error, Toast.LENGTH_LONG).show();
+                    Toast.makeText(act, getString(R.string.error_with_message, result.error), Toast.LENGTH_LONG).show();
                     act.finish();
                     return;
                 }
                 if (result.webpFiles.isEmpty()) {
-                    Toast.makeText(act, "No stickers found in file", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(act, R.string.error_no_stickers_found, Toast.LENGTH_SHORT).show();
                     act.finish();
                     return;
                 }
@@ -91,33 +88,40 @@ public class ImportIndividualStickerActivity extends BaseActivity {
     private static ExtractResult extractSticker(ImportIndividualStickerActivity activity, Uri uri) {
         ExtractResult result = new ExtractResult();
         result.webpFiles = new ArrayList<>();
-        result.defaultTitle = "Imported Pack";
-        result.defaultAuthor = "Unknown";
+        result.defaultTitle = activity.getString(R.string.imported_pack_default_title);
+        result.defaultAuthor = activity.getString(R.string.unknown_author);
         try {
             result.tempDir = new File(activity.getCacheDir(), "idwasticker_" + System.currentTimeMillis());
-            result.tempDir.mkdirs();
+            if (!result.tempDir.exists() && !result.tempDir.mkdirs()) {
+                result.error = "Failed to create temp directory";
+                return result;
+            }
             InputStream is = activity.getContentResolver().openInputStream(uri);
-            if (is == null) { result.error = "Cannot open file"; return result; }
+            if (is == null) { result.error = activity.getString(R.string.error_cannot_open_file); return result; }
             byte[] peek = new byte[2];
             int peekRead = is.read(peek);
             is.close();
             boolean isZip = peekRead >= 2 && peek[0] == 0x50 && peek[1] == 0x4B;
             if (isZip) {
                 InputStream is2 = activity.getContentResolver().openInputStream(uri);
+                if (is2 == null) { result.error = activity.getString(R.string.error_cannot_open_file); return result; }
                 ZipInputStream zis = new ZipInputStream(is2);
                 ZipEntry entry;
                 while ((entry = zis.getNextEntry()) != null) {
                     File file = new File(result.tempDir, entry.getName());
-                    if (entry.isDirectory()) { file.mkdirs(); } else {
-                        file.getParentFile().mkdirs();
-                        BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file));
-                        byte[] buffer = new byte[8192]; int len;
-                        while ((len = zis.read(buffer)) > 0) bos.write(buffer, 0, len);
-                        bos.close();
+                    if (entry.isDirectory()) { 
+                        file.mkdirs(); 
+                    } else {
+                        File parent = file.getParentFile();
+                        if (parent != null) parent.mkdirs();
+                        try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(file))) {
+                            byte[] buffer = new byte[8192]; int len;
+                            while ((len = zis.read(buffer)) > 0) bos.write(buffer, 0, len);
+                        }
                     }
                     zis.closeEntry();
                 }
-                zis.close(); is2.close();
+                zis.close();
                 File[] files = result.tempDir.listFiles();
                 if (files != null) for (File f : files) if (f.getName().toLowerCase().endsWith(".webp")) result.webpFiles.add(f);
                 File titleFile = new File(result.tempDir, "title.txt");
@@ -126,12 +130,14 @@ public class ImportIndividualStickerActivity extends BaseActivity {
                 if (authorFile.exists()) result.defaultAuthor = WastickerParser.readStringFromFile(authorFile).trim();
             } else {
                 InputStream is2 = activity.getContentResolver().openInputStream(uri);
-                if (is2 == null) { result.error = "Cannot open file"; return result; }
+                if (is2 == null) { result.error = activity.getString(R.string.error_cannot_open_file); return result; }
                 File webpFile = new File(result.tempDir, "sticker_" + System.currentTimeMillis() + ".webp");
-                BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(webpFile));
-                byte[] buffer = new byte[8192]; int len;
-                while ((len = is2.read(buffer)) > 0) bos.write(buffer, 0, len);
-                bos.close(); is2.close();
+                try (BufferedOutputStream bos = new BufferedOutputStream(new FileOutputStream(webpFile))) {
+                    byte[] buffer = new byte[8192]; int len;
+                    while ((len = is2.read(buffer)) > 0) bos.write(buffer, 0, len);
+                } finally {
+                    is2.close();
+                }
                 result.webpFiles.add(webpFile);
             }
             result.eligiblePacks = new ArrayList<>();
@@ -146,12 +152,12 @@ public class ImportIndividualStickerActivity extends BaseActivity {
     private void showPackPicker(ExtractResult result) {
         List<String> options = new ArrayList<>();
         for (StickerPack pack : result.eligiblePacks) {
-            options.add(pack.name + " (" + pack.getStickers().size() + "/30)");
+            options.add(getString(R.string.pack_count_format, pack.name, pack.getStickers().size()));
         }
-        options.add("Create New Pack");
+        options.add(getString(R.string.create_new_pack_option));
 
         new MaterialAlertDialogBuilder(this)
-                .setTitle("Add to which pack?")
+                .setTitle(R.string.add_to_pack_title)
                 .setItems(options.toArray(new String[0]), (dialog, which) -> {
                     if (which < result.eligiblePacks.size()) {
                         StickerPack selectedPack = result.eligiblePacks.get(which);
@@ -210,9 +216,9 @@ public class ImportIndividualStickerActivity extends BaseActivity {
                 ImportIndividualStickerActivity act = ref.get();
                 if (act == null) return;
                 if (finalError != null) {
-                    Toast.makeText(act, "Error: " + finalError, Toast.LENGTH_LONG).show();
+                    Toast.makeText(act, getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
                 } else {
-                    Toast.makeText(act, "Sticker(s) imported successfully!", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(act, R.string.import_success_toast, Toast.LENGTH_SHORT).show();
                 }
                 act.finish();
             });

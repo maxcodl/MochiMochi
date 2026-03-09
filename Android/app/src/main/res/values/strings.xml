@@ -63,7 +63,124 @@
     <string name="sticker_info_fps_format">%d fps</string>
     <string name="sticker_info_webp">Format: WebP</string>
     <string name="dot_separator"> • </string>
+    <string name="sticker_pack_size_summary">%1$s  %2$s</string>
 
     <!-- Entry Activity -->
     <string name="error_loading_packs">Error loading sticker packs: %s</string>
+
+    <!-- Empty State -->
+    <string name="empty_state_title">No sticker packs yet</string>
+    <string name="empty_state_description">Import a .wasticker file to start using your favorite stickers in WhatsApp.</string>
+    <string name="import_wasticker">Import .wasticker</string>
+    <string name="import_label">Import</string>
+
+    <!-- Dialogs and Toasts -->
+    <string name="delete_pack_title">Delete Pack</string>
+    <string name="delete_pack_confirm_with_name">Delete \"%s\"?</string>
+    <string name="cancel">Cancel</string>
+    <string name="later">Later</string>
+    <string name="select_wasticker_file">Select .wasticker file</string>
+    <string name="import_error">Import error: %s</string>
+    <string name="pack_imported">✓ Pack imported!</string>
+    <string name="error_with_message">Error: %s</string>
+    <string name="pack_deleted">Pack deleted</string>
+    <string name="settings">Settings</string>
+    <string name="action_info">Pack Info</string>
+
+    <!-- Diagnostics and Tabs -->
+    <string name="pack_diagnostics_title">Pack Diagnostics</string>
+    <string name="pack_summary">Pack Summary</string>
+    <string name="sticker_details">Sticker Details</string>
+    <string name="pack_diagnostics_header">PACK DIAGNOSTICS</string>
+    <string name="status_label">Status</string>
+    <string name="composition_label">Composition</string>
+    <string name="total_data_size_label">Total Data Size</string>
+    <string name="unique_identifier_label">Unique Identifier</string>
+    <string name="links_header">LINKS</string>
+    <string name="website_link">🌐  Website</string>
+    <string name="email_link">✉  Email</string>
+    <string name="privacy_policy_link">🔒  Privacy Policy</string>
+    <string name="license_agreement_link">📄  License Agreement</string>
+    <string name="sticker_audit_header">STICKER AUDIT (%d)</string>
+    <string name="animated_pack_flag">Animated (Pack Flag)</string>
+    <string name="static_pack">Static Pack</string>
+    <string name="sticker_composition_format">%1$d Stickers (%2$d WebP)</string>
+    <string name="default_sticker_pack_name">Sticker Pack</string>
+
+    <!-- Edit/Create Strings -->
+    <string name="select_stickers_title">Select stickers</string>
+    <string name="unknown_author">Unknown</string>
+    <string name="sticker_count_format">%1$d / %2$d</string>
+    <string name="edit_emojis_hint">Enter up to 3 emojis</string>
+    <string name="stickers_label">Stickers</string>
+
+    <!-- Sticker Audit Types -->
+    <string name="animated">ANIMATED</string>
+    <string name="lossless">LOSSLESS</string>
+    <string name="lossy">LOSSY</string>
+
+    <!-- Validation Errors -->
+    <string name="title_validation_error">Validation Error</string>
+    <string name="whatsapp_not_installed">WhatsApp is not installed</string>
+    <string name="validation_internal_check_failed">Internal Check Failed:\n%s</string>
+    <string name="whatsapp_reported_error">WhatsApp reported an error:\n%s</string>
+
+    <!-- Entry Activity -->
+    <string name="error_importing_wasticker">error importing wasticker</string>
+    <string name="pack_imported_simple">Sticker pack imported!</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="default_folder_display">Default (internal storage)</string>
+    <string name="reset_to_default_toast">Reset to default folder</string>
+    <string name="no_packs_to_diagnose">No packs found to diagnose</string>
+    <string name="diagnostics_pack_selection_title">Select Pack for Diagnostic</string>
+    <string name="all_packs_option">[ ALL PACKS ]</string>
+    <string name="deep_pack_diagnostics_report_title">=== Deep Pack Diagnostics ===\n\n</string>
+    <string name="diagnostics_missing_tray">⚠ MISSING</string>
+    <string name="diagnostics_tray_label">  Tray: </string>
+    <string name="diagnostics_missing_sticker">    ⚠ %s MISSING\n</string>
+    <string name="diagnostics_results_title">Diagnostic Results</string>
+    <string name="repair_process_title">Process &amp; Repair</string>
+    <string name="copy_label">Copy</string>
+    <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="repair_engine_init">Initializing deep repair engine...\n</string>
+    <string name="processing_stickers_title">Processing Stickers...</string>
+    <string name="done">Done</string>
+    <string name="copy_log">Copy Log</string>
+    <string name="repair_complete">Repair complete.</string>
+    <string name="donate_title">❤️ Donate</string>
+    <string name="donate_message">I know u poor so send your kidney to Max ❤️</string>
+    <string name="donate_positive">Gladly 💌</string>
+    <string name="sending_title">🚑 Sending...</string>
+    <string name="settings_sticker_folder_label">STICKER FOLDER</string>
+    <string name="settings_choose_folder">Choose Folder</string>
+    <string name="settings_reset_to_default">Reset to Default</string>
+    <string name="settings_theme_label">THEME</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_theme_amoled">AMOLED Dark</string>
+    <string name="settings_theme_system">System Default</string>
+    <string name="settings_performance_label">PERFORMANCE</string>
+    <string name="settings_enable_animations">Enable Performance Mode</string>
+    <string name="settings_import_behaviour_label">WHEN IMPORTING A SINGLE STICKER</string>
+    <string name="settings_ask_pack_picker">Ask which pack to add to</string>
+    <string name="settings_diagnostics_label">DIAGNOSTICS</string>
+    <string name="settings_run_diagnostics">Run Pack Diagnostics</string>
+    <string name="settings_about_label">ABOUT</string>
+    <string name="settings_about_app_name">MochiMochi ジ — Sticker Manager</string>
+    <string name="settings_about_author">by Max</string>
+    <string name="settings_github_button">⭐  View on GitHub</string>
+    <string name="settings_telegram_button">💬 Telegram</string>
+    <string name="settings_donate_button">❤  Donate $69</string>
+
+    <!-- Import Individual Stickers -->
+    <string name="no_file_provided">No file provided</string>
+    <string name="error_no_stickers_found">No stickers found in file</string>
+    <string name="add_to_pack_title">Add to which pack?</string>
+    <string name="create_new_pack_option">Create New Pack</string>
+    <string name="import_success_toast">Sticker(s) imported successfully!</string>
+    <string name="pack_count_format">%1$s (%2$d/30)</string>
+    <string name="error_cannot_open_file">Cannot open file</string>
+    <string name="imported_pack_default_title">Imported Pack</string>
 </resources>

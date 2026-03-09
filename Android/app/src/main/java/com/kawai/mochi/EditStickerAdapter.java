@@ -14,6 +14,10 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.facebook.drawee.backends.pipeline.Fresco;
 import com.facebook.drawee.interfaces.DraweeController;
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imagepipeline.request.ImageRequest;
+import com.facebook.imagepipeline.request.ImageRequestBuilder;
+import com.kawai.mochi.R;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -73,8 +77,17 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
         }
 
         if (uri != null) {
+            int size = holder.stickerImage.getWidth();
+            if (size <= 0) {
+                size = (int) (96 * holder.itemView.getContext().getResources().getDisplayMetrics().density);
+            }
+            // Animated stickers decode at 75% of display size to reduce per-frame memory
+            int renderSize = item.isAnimated ? (int) (size * 0.40f) : size;
+            ImageRequest request = ImageRequestBuilder.newBuilderWithSource(uri)
+                    .setResizeOptions(new ResizeOptions(renderSize, renderSize))
+                    .build();
             DraweeController controller = Fresco.newDraweeControllerBuilder()
-                    .setUri(uri)
+                    .setImageRequest(request)
                     .setAutoPlayAnimations(true)
                     .setOldController(holder.stickerImage.getController())
                     .build();

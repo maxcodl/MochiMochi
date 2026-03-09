@@ -15,6 +15,8 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
+import com.kawai.mochi.R;
+
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
@@ -176,7 +178,7 @@ public class EntryActivity extends BaseActivity {
                 if (finalResult.first != null) {
                     act.showErrorMessage(finalResult.first);
                 } else {
-                    Toast.makeText(act, "Sticker pack imported!", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(act, R.string.pack_imported_simple, Toast.LENGTH_SHORT).show();
                     act.showStickerPack(finalResult.second != null ? finalResult.second : new ArrayList<>());
                 }
             });

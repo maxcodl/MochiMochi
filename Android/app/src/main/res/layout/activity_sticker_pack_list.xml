@@ -5,19 +5,21 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?attr/colorSurface">
+    android:background="?attr/colorSurface"
+    android:fitsSystemWindows="true">
 
     <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/appbar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="?attr/colorSurface"
+        app:liftOnScroll="true"
         app:elevation="0dp">
 
         <com.google.android.material.appbar.MaterialToolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            app:layout_scrollFlags="scroll|enterAlways"
             app:titleTextColor="?attr/colorOnSurface"
             tools:title="@string/app_name" />
 
@@ -42,14 +44,14 @@
         android:gravity="center"
         android:orientation="vertical"
         android:padding="32dp"
-        android:visibility="gone"
-        tools:visibility="visible">
+        android:visibility="gone">
 
         <ImageView
             android:layout_width="120dp"
             android:layout_height="120dp"
             android:layout_marginBottom="24dp"
             android:alpha="0.3"
+            android:contentDescription="@null"
             android:src="@drawable/sticker_3rdparty_info"
             app:tint="?attr/colorOnSurface" />
 
@@ -57,7 +59,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:gravity="center"
-            android:text="No sticker packs yet"
+            android:text="@string/empty_state_title"
             android:textAppearance="?attr/textAppearanceHeadlineSmall"
             android:textColor="?attr/colorOnSurface"
             android:textStyle="bold" />
@@ -68,7 +70,7 @@
             android:layout_marginTop="8dp"
             android:layout_marginBottom="32dp"
             android:gravity="center"
-            android:text="Import a .wasticker file to start using your favorite stickers in WhatsApp."
+            android:text="@string/empty_state_description"
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="14sp" />
 
@@ -79,7 +81,7 @@
             android:layout_height="wrap_content"
             android:paddingStart="24dp"
             android:paddingEnd="24dp"
-            android:text="Import .wasticker"
+            android:text="@string/import_wasticker"
             app:icon="@drawable/ic_fab_add" />
     </LinearLayout>
 
@@ -99,8 +101,10 @@
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|end"
         android:layout_margin="16dp"
-        android:text="Import"
+        android:text="@string/import_label"
         app:icon="@drawable/ic_fab_add"
+        app:iconGravity="textStart"
+        android:padding="0dp"
         android:visibility="gone"
         tools:visibility="visible"/>
 

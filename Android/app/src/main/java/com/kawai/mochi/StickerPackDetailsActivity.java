@@ -20,9 +20,9 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.facebook.drawee.view.SimpleDraweeView;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -74,7 +74,6 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         TextView packPublisherTextView = findViewById(R.id.author);
         ImageView packTrayIcon = findViewById(R.id.tray_image);
         TextView packSizeTextView = findViewById(R.id.pack_size);
-        View expandedStickerView = findViewById(R.id.expanded_sticker_card);
         MaterialButton editPackButton = findViewById(R.id.edit_pack_button);
         MaterialButton deletePackButton = findViewById(R.id.delete_pack_button);
 
@@ -87,7 +86,9 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         recyclerView.addOnScrollListener(dividerScrollListener);
         divider = findViewById(R.id.divider);
         
-        setupAdapter(expandedStickerView);
+        setupAdapter();
+        // Disable item animations so stickers don't flicker/fade-in when the grid is first laid out
+        recyclerView.setItemAnimator(null);
 
         packNameTextView.setText(stickerPack.name);
         packPublisherTextView.setText(stickerPack.publisher);
@@ -95,7 +96,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         
         int count = stickerPack.getStickers() != null ? stickerPack.getStickers().size() : 0;
         String countStr = getResources().getString(R.string.sticker_count, count);
-        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + "  " + countStr);
+        String sizeStr = Formatter.formatShortFileSize(this, stickerPack.getTotalSize());
+        packSizeTextView.setText(getString(R.string.sticker_pack_size_summary, sizeStr, countStr));
 
         addButton.setOnClickListener(v -> addStickerPackToWhatsApp(stickerPack.identifier, stickerPack.name));
 
@@ -121,7 +123,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
         deletePackButton.setOnClickListener(v -> {
             new MaterialAlertDialogBuilder(this)
-                    .setTitle("Delete Pack")
+                    .setTitle(R.string.delete_pack_title)
                     .setMessage(R.string.delete_pack_confirm)
                     .setPositiveButton(R.string.delete_button, (dialog, which) -> {
                         WeakReference<StickerPackDetailsActivity> ref = new WeakReference<>(this);
@@ -141,9 +143,9 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                                 StickerPackDetailsActivity act = ref.get();
                                 if (act == null) return;
                                 if (finalError != null) {
-                                    Toast.makeText(act, "Error: " + finalError, Toast.LENGTH_LONG).show();
+                                    Toast.makeText(act, getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
                                 } else {
-                                    Toast.makeText(act, "Pack deleted", Toast.LENGTH_SHORT).show();
+                                    Toast.makeText(act, R.string.pack_deleted, Toast.LENGTH_SHORT).show();
                                     Intent intent = new Intent(act, EntryActivity.class);
                                     intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_NEW_TASK);
                                     act.startActivity(intent);
@@ -152,14 +154,22 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
                             });
                         });
                     })
-                    .setNegativeButton("Cancel", null)
+                    .setNegativeButton(R.string.cancel, null)
                     .show();
         });
     }
 
-    private void setupAdapter(View expandedStickerView) {
+    private void setupAdapter() {
         if (stickerPreviewAdapter == null) {
-            stickerPreviewAdapter = new StickerPreviewAdapter(getLayoutInflater(), R.drawable.sticker_error, getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_size), getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_padding), stickerPack, expandedStickerView);
+            boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(this);
+            stickerPreviewAdapter = new StickerPreviewAdapter(
+                    stickerPack.getStickers(),
+                    stickerPack.identifier,
+                    getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_size),
+                    getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_padding),
+                    stickerPack.animatedStickerPack,
+                    animationsEnabled,
+                    /* isGridMode= */ true);
             recyclerView.setAdapter(stickerPreviewAdapter);
         }
     }
@@ -198,20 +208,19 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         TextView packPublisherTextView = findViewById(R.id.author);
         ImageView packTrayIcon = findViewById(R.id.tray_image);
         TextView packSizeTextView = findViewById(R.id.pack_size);
-        View expandedStickerView = findViewById(R.id.expanded_sticker_card);
-
         packNameTextView.setText(stickerPack.name);
         packPublisherTextView.setText(stickerPack.publisher);
         packTrayIcon.setImageURI(StickerPackLoader.getStickerAssetUri(stickerPack.identifier, stickerPack.trayImageFile));
         
         int count = stickerPack.getStickers() != null ? stickerPack.getStickers().size() : 0;
         String countStr = getResources().getString(R.string.sticker_count, count);
-        packSizeTextView.setText(Formatter.formatShortFileSize(this, stickerPack.getTotalSize()) + "  " + countStr);
+        String sizeStr = Formatter.formatShortFileSize(this, stickerPack.getTotalSize());
+        packSizeTextView.setText(getString(R.string.sticker_pack_size_summary, sizeStr, countStr));
 
         findViewById(R.id.sticker_pack_animation_indicator).setVisibility(stickerPack.animatedStickerPack ? View.VISIBLE : View.GONE);
         
         stickerPreviewAdapter = null;
-        setupAdapter(expandedStickerView);
+        setupAdapter();
 
         whitelistCheckCancelled = false;
         WeakReference<StickerPackDetailsActivity> wcRef = new WeakReference<>(this);
@@ -250,7 +259,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         // Single info icon, themed to match the toolbar text colour
-        menu.add(Menu.NONE, R.id.action_info, Menu.NONE, "Pack Info")
+        menu.add(Menu.NONE, R.id.action_info, Menu.NONE, R.string.action_info)
                 .setIcon(R.drawable.sticker_3rdparty_info)
                 .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS);
         android.view.MenuItem infoItem = menu.findItem(R.id.action_info);
@@ -277,19 +286,23 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     private final ViewTreeObserver.OnGlobalLayoutListener pageLayoutListener = new ViewTreeObserver.OnGlobalLayoutListener() {
         @Override
         public void onGlobalLayout() {
-            setNumColumns(recyclerView.getWidth() / recyclerView.getContext().getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_size));
-        }
-    };
-
-    private void setNumColumns(int numColumns) {
-        if (this.numColumns != numColumns) {
-            layoutManager.setSpanCount(numColumns);
-            this.numColumns = numColumns;
-            if (stickerPreviewAdapter != null) {
-                stickerPreviewAdapter.notifyDataSetChanged();
+            int width = recyclerView.getWidth();
+            if (width <= 0) return; // not measured yet
+            // Exclude the RecyclerView's own horizontal padding before computing columns.
+            int contentWidth = width - recyclerView.getPaddingStart() - recyclerView.getPaddingEnd();
+            int imageSize = recyclerView.getContext().getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_size);
+            int cols = Math.max(contentWidth / imageSize, 1);
+            if (numColumns != cols) {
+                numColumns = cols;
+                layoutManager.setSpanCount(numColumns);
+                // No notifyDataSetChanged needed — span count change triggers re-layout automatically
+            }
+            // Remove listener once we have a valid measurement
+            if (recyclerView.getViewTreeObserver().isAlive()) {
+                recyclerView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
             }
         }
-    }
+    };
 
     private final RecyclerView.OnScrollListener dividerScrollListener = new RecyclerView.OnScrollListener() {
         @Override

@@ -26,7 +26,7 @@ import java.util.zip.ZipInputStream;
 
 public class WastickerParser {
     private static final String TAG = "WastickerParser";
-    private static final String PREFS_NAME = "mochii_prefs";
+    private static final String PREFS_NAME = "mochi_prefs";
     private static final String KEY_STICKER_FOLDER = "sticker_folder_path";
 
     /**

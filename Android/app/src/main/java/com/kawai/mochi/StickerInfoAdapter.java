@@ -20,6 +20,7 @@ import com.facebook.drawee.view.SimpleDraweeView;
 import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.request.ImageRequestBuilder;
+import com.kawai.mochi.R;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -64,9 +65,13 @@ public class StickerInfoAdapter extends RecyclerView.Adapter<StickerInfoAdapter.
         // PERFORMANCE: Resize animation to match the 64dp display size
         final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_info_preview_size);
         Uri contentUri = StickerPackLoader.getStickerAssetUri(packId, sticker.imageFileName);
+        // Use cached info if available; animated stickers decode at 75% of display size
+        WebPInfo cached = infoCache.get(stickerFile.getAbsolutePath());
+        int baseSize = previewSize > 0 ? previewSize : 128;
+        int infoRenderSize = (cached != null && cached.isAnimated) ? (int) (baseSize * 0.40f) : baseSize;
         
         ImageRequest request = ImageRequestBuilder.newBuilderWithSource(contentUri)
-                .setResizeOptions(new ResizeOptions(previewSize > 0 ? previewSize : 128, previewSize > 0 ? previewSize : 128))
+                .setResizeOptions(new ResizeOptions(infoRenderSize, infoRenderSize))
                 .build();
 
         DraweeController controller = Fresco.newDraweeControllerBuilder()
@@ -82,8 +87,8 @@ public class StickerInfoAdapter extends RecyclerView.Adapter<StickerInfoAdapter.
 
         // Reset fields that will be populated asynchronously
         holder.dimens.setVisibility(View.GONE);
-        holder.type.setText("...");
-        holder.color.setText("...");
+        holder.type.setText("…");
+        holder.color.setText("…");
         holder.frames.setVisibility(View.GONE);
 
         // PERFORMANCE: Load detailed WebP info in background
@@ -106,7 +111,7 @@ public class StickerInfoAdapter extends RecyclerView.Adapter<StickerInfoAdapter.
     }
 
     private void updateUIWithInfo(ViewHolder holder, WebPInfo info) {
-        holder.type.setText(info.isAnimated ? "ANIMATED" : (info.isLossless ? "LOSSLESS" : "LOSSY"));
+        holder.type.setText(info.isAnimated ? context.getString(R.string.animated) : (info.isLossless ? context.getString(R.string.lossless) : context.getString(R.string.lossy)));
         
         if (info.width > 0 && info.height > 0) {
             holder.dimens.setText(context.getString(R.string.sticker_info_dimens_format, info.width, info.height));

@@ -18,6 +18,8 @@ import android.net.Uri;
 
 import androidx.annotation.NonNull;
 
+import com.kawai.mochi.BuildConfig;
+
 class WhitelistCheck {
     private static final String AUTHORITY_QUERY_PARAM = "authority";
     private static final String IDENTIFIER_QUERY_PARAM = "identifier";

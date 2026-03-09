@@ -15,6 +15,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.tabs.TabLayout;
+import com.kawai.mochi.R;
 
 import java.io.FileNotFoundException;
 import java.io.InputStream;
@@ -33,7 +34,7 @@ public class StickerPackInfoActivity extends BaseActivity {
         setSupportActionBar(toolbar);
         if (getSupportActionBar() != null) {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
-            getSupportActionBar().setTitle("Pack Diagnostics");
+            getSupportActionBar().setTitle(R.string.pack_diagnostics_title);
         }
 
         // ── Read all extras ──
@@ -84,7 +85,7 @@ public class StickerPackInfoActivity extends BaseActivity {
 
         // ── Pack Summary Fields ──
         ((TextView) findViewById(R.id.info_pack_name)).setText(
-                TextUtils.isEmpty(packName) ? "Sticker Pack" : packName);
+                TextUtils.isEmpty(packName) ? getString(R.string.default_sticker_pack_name) : packName);
 
         TextView publisherView = findViewById(R.id.info_publisher);
         if (!TextUtils.isEmpty(publisher)) {
@@ -97,7 +98,7 @@ public class StickerPackInfoActivity extends BaseActivity {
 
         // Diagnostics
         boolean isAnimated = detectPackAnimated(packId, stickerPack);
-        ((TextView) findViewById(R.id.info_animated)).setText(isAnimated ? "Animated (Pack Flag)" : "Static Pack");
+        ((TextView) findViewById(R.id.info_animated)).setText(isAnimated ? getString(R.string.animated_pack_flag) : getString(R.string.static_pack));
 
         int webpCount = 0;
         if (stickerPack != null && stickerPack.getStickers() != null) {
@@ -105,7 +106,7 @@ public class StickerPackInfoActivity extends BaseActivity {
                 if (s.imageFileName.toLowerCase().endsWith(".webp")) webpCount++;
             }
             ((TextView) findViewById(R.id.info_composition)).setText(
-                    stickerPack.getStickers().size() + " Stickers (" + webpCount + " WebP)");
+                    getString(R.string.sticker_composition_format, stickerPack.getStickers().size(), webpCount));
         }
 
         // ── Sticker details RecyclerView ──
@@ -113,7 +114,7 @@ public class StickerPackInfoActivity extends BaseActivity {
             List<Sticker> stickers = stickerPack.getStickers();
             if (stickers != null && !stickers.isEmpty()) {
                 TextView header = findViewById(R.id.info_stickers_header);
-                header.setText("STICKER AUDIT (" + stickers.size() + ")");
+                header.setText(getString(R.string.sticker_audit_header, stickers.size()));
 
                 RecyclerView rv = findViewById(R.id.info_sticker_list);
                 LinearLayoutManager lm = new LinearLayoutManager(this);

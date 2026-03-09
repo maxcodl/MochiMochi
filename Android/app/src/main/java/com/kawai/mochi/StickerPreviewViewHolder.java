@@ -13,6 +13,7 @@ import android.view.View;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.kawai.mochi.R;
 
 class StickerPreviewViewHolder extends RecyclerView.ViewHolder {
 

@@ -25,6 +25,8 @@ import android.webkit.MimeTypeMap;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.kawai.mochi.BuildConfig;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -286,8 +288,18 @@ public class StickerContentProvider extends ContentProvider {
                     return fetchFile(uri, am, fileName, identifier);
                 } else {
                     for (Sticker sticker : stickerPack.getStickers()) {
+                        // Check original file
                         if (fileName.equals(sticker.imageFileName)) {
                             return fetchFile(uri, am, fileName, identifier);
+                        }
+                        // Check thumbnail file with fallback to original
+                        if (fileName.equals("thumbs/thumb_" + sticker.imageFileName)) {
+                            AssetFileDescriptor afd = fetchFile(uri, am, fileName, identifier);
+                            if (afd != null) {
+                                return afd;
+                            }
+                            // Fallback to original sticker file if thumbnail is missing
+                            return fetchFile(uri, am, sticker.imageFileName, identifier);
                         }
                     }
                 }
@@ -315,9 +327,13 @@ public class StickerContentProvider extends ContentProvider {
         }
         // 2. Fall back to bundled asset
         try {
+            // Note: thumbnails aren't in assets, so this only works for original files
             return am.openFd(identifier + "/" + fileName);
         } catch (IOException e) {
-            Log.e(Objects.requireNonNull(getContext()).getPackageName(), "IOException when getting asset file, uri:" + uri, e);
+            // Don't log error for thumbnails missing in assets as they are generated in filesDir
+            if (!fileName.startsWith("thumbs/")) {
+                Log.e(Objects.requireNonNull(getContext()).getPackageName(), "IOException when getting asset file, uri:" + uri, e);
+            }
             return null;
         }
     }

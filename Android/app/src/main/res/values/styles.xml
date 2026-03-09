@@ -12,6 +12,17 @@
 
         <!-- Smooth Transitions -->
         <item name="android:windowAnimationStyle">@style/WindowAnimations</item>
+
+        <item name="materialButtonStyle">@style/AppButtonStyle</item>
+    </style>
+
+    <style name="AppButtonStyle" parent="Widget.Material3.Button">
+        <item name="shapeAppearanceOverlay">@style/ButtonShapeAppearance</item>
+    </style>
+
+    <style name="ButtonShapeAppearance" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">8dp</item>
     </style>
 
     <style name="WindowAnimations">
@@ -33,6 +44,7 @@
         <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
         <item name="colorControlNormal">?attr/colorOnSurface</item>
         <item name="android:windowAnimationStyle">@style/WindowAnimations</item>
+        <item name="materialButtonStyle">@style/AppButtonStyle</item>
     </style>
 
     <!-- Applied AFTER DynamicColors to restore black surfaces in AMOLED mode.
@@ -81,6 +93,15 @@
         <item name="android:drawablePadding">32dp</item>
         <item name="android:clickable">true</item>
         <item name="android:foreground">?android:attr/selectableItemBackground</item>
+    </style>
+
+    <style name="SettingsHeaderStyle">
+        <item name="android:layout_marginTop">16dp</item>
+        <item name="android:layout_marginBottom">8dp</item>
+        <item name="android:textColor">?attr/colorPrimary</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">true</item>
     </style>
 
 </resources>

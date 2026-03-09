@@ -10,23 +10,16 @@ package com.kawai.mochi;
 
 import android.content.Context;
 import android.content.Intent;
-import android.net.Uri;
 import android.text.format.Formatter;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.LinearLayout;
 
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.facebook.drawee.backends.pipeline.Fresco;
-import com.facebook.drawee.interfaces.DraweeController;
-import com.facebook.drawee.view.SimpleDraweeView;
-import com.facebook.imagepipeline.common.ResizeOptions;
-import com.facebook.imagepipeline.request.ImageRequest;
-import com.facebook.imagepipeline.request.ImageRequestBuilder;
 import com.google.android.material.button.MaterialButton;
+import com.kawai.mochi.R;
 
 import java.util.List;
 
@@ -37,11 +30,21 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
     private final OnAddButtonClickedListener onAddButtonClickedListener;
     private int maxNumberOfStickersInARow;
     private int minMarginBetweenImages;
+    private boolean isScrolling;
+    private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
+    // Cache so we don't hit SharedPreferences on every bind
+    Boolean animationsEnabledCache = null;
 
     StickerPackListAdapter(@NonNull List<StickerPack> stickerPacks, @NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
         this.stickerPacks = stickerPacks;
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
+        // Performance: Increase pool size to hold enough views for ~5 visible rows
+        sharedPool.setMaxRecycledViews(0, 25);
+    }
+
+    public void setScrolling(boolean isScrolling) {
+        this.isScrolling = isScrolling;
     }
 
     @Override
@@ -55,7 +58,11 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         final Context context = viewGroup.getContext();
         final LayoutInflater layoutInflater = LayoutInflater.from(context);
         final View stickerPackRow = layoutInflater.inflate(R.layout.sticker_packs_list_item, viewGroup, false);
-        return new StickerPackListItemViewHolder(stickerPackRow);
+        StickerPackListItemViewHolder vh = new StickerPackListItemViewHolder(stickerPackRow);
+        
+        // Performance: Use a shared pool for all horizontal preview lists
+        vh.imageRowView.setRecycledViewPool(sharedPool);
+        return vh;
     }
 
     @Override
@@ -84,76 +91,32 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         setAddButtonAppearance(viewHolder.addButton, pack);
         viewHolder.animatedStickerPackIndicator.setVisibility(pack.animatedStickerPack ? View.VISIBLE : View.GONE);
 
-        // Populate sticker preview image row
         if (pack.getStickers() != null && maxNumberOfStickersInARow > 0) {
             final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
             int numToShow = Math.min(maxNumberOfStickersInARow, pack.getStickers().size());
-            boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(context);
-
-            // QUALITY FIX: Use the actual preview size instead of aggressive downscaling
-            int renderSize = previewSize;
-
-            int currentChildCount = viewHolder.imageRowView.getChildCount();
-            
-            // Critical fix for ClassCastException: remove any views that aren't SimpleDraweeView
-            for (int i = 0; i < currentChildCount; i++) {
-                if (!(viewHolder.imageRowView.getChildAt(i) instanceof SimpleDraweeView)) {
-                    viewHolder.imageRowView.removeViewAt(i);
-                    currentChildCount--;
-                    i--;
-                }
+            List<Sticker> previewStickers = pack.getStickers().subList(0, numToShow);
+            if (animationsEnabledCache == null) {
+                animationsEnabledCache = SettingsActivity.isAnimationsEnabled(context);
             }
+            boolean animationsEnabled = animationsEnabledCache;
 
-            if (currentChildCount > numToShow) {
-                viewHolder.imageRowView.removeViews(numToShow, currentChildCount - numToShow);
+            if (viewHolder.previewAdapter != null) {
+                // Reuse existing adapter — Fresco keeps images in memory cache,
+                // so scrolling back to a seen item costs nothing.
+                viewHolder.previewAdapter.updateData(previewStickers, pack.identifier,
+                        previewSize, minMarginBetweenImages,
+                        pack.animatedStickerPack, animationsEnabled, isScrolling);
+            } else {
+                StickerPreviewAdapter adapter = new StickerPreviewAdapter(
+                        previewStickers, pack.identifier, previewSize,
+                        minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled);
+                adapter.setScrolling(isScrolling);
+                viewHolder.previewAdapter = adapter;
+                viewHolder.imageRowView.setAdapter(adapter);
             }
-
-            for (int i = 0; i < numToShow; i++) {
-                SimpleDraweeView rowImage;
-                if (i < viewHolder.imageRowView.getChildCount()) {
-                    rowImage = (SimpleDraweeView) viewHolder.imageRowView.getChildAt(i);
-                } else {
-                    rowImage = (SimpleDraweeView) LayoutInflater.from(context)
-                            .inflate(R.layout.sticker_packs_list_image_item, viewHolder.imageRowView, false);
-                    viewHolder.imageRowView.addView(rowImage);
-                }
-
-                rowImage.setLayoutParams(new LinearLayout.LayoutParams(previewSize, previewSize));
-                if (i != 0) {
-                    LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) rowImage.getLayoutParams();
-                    lp.setMarginStart(minMarginBetweenImages);
-                    lp.leftMargin = minMarginBetweenImages;
-                    rowImage.setLayoutParams(lp);
-                }
-                
-                final Uri fileUri = StickerPackLoader.getStickerAssetUri(
-                        pack.identifier, pack.getStickers().get(i).imageFileName);
-                
-                ImageRequest request = ImageRequestBuilder.newBuilderWithSource(fileUri)
-                        .setResizeOptions(new ResizeOptions(renderSize, renderSize))
-                        .build();
-
-                DraweeController controller = Fresco.newDraweeControllerBuilder()
-                        .setImageRequest(request)
-                        .setAutoPlayAnimations(animationsEnabled)
-                        .setOldController(rowImage.getController())
-                        .build();
-                rowImage.setController(controller);
-            }
+            viewHolder.imageRowView.setVisibility(View.VISIBLE);
         } else {
-            viewHolder.imageRowView.removeAllViews();
-        }
-    }
-
-    @Override
-    public void onViewRecycled(@NonNull StickerPackListItemViewHolder viewHolder) {
-        super.onViewRecycled(viewHolder);
-        // PERFORMANCE: Stop animations and release memory immediately when row scrolls away
-        for (int i = 0; i < viewHolder.imageRowView.getChildCount(); i++) {
-            View child = viewHolder.imageRowView.getChildAt(i);
-            if (child instanceof SimpleDraweeView) {
-                ((SimpleDraweeView) child).setController(null);
-            }
+            viewHolder.imageRowView.setVisibility(View.GONE);
         }
     }
 
@@ -186,6 +149,11 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
 
     void setStickerPackList(List<StickerPack> stickerPackList) {
         this.stickerPacks = stickerPackList;
+    }
+
+    /** Call when the animations setting changes so the next bind picks up the new value. */
+    void invalidateAnimationsCache() {
+        animationsEnabledCache = null;
     }
 
     public interface OnAddButtonClickedListener {

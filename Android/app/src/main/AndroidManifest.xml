@@ -3,7 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <application
-        android:name=".StickerApplication"
+        android:name="com.kawai.mochi.StickerApplication"
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
@@ -13,7 +13,7 @@
         android:theme="@style/AppTheme"
         tools:ignore="GoogleAppIndexingWarning">
         <activity
-            android:name=".EntryActivity"
+            android:name="com.kawai.mochi.EntryActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -40,36 +40,36 @@
             </intent-filter>
         </activity>
         <activity
-            android:name=".StickerPackListActivity"
+            android:name="com.kawai.mochi.StickerPackListActivity"
             android:exported="false" />
         <activity
-            android:name=".StickerPackDetailsActivity"
+            android:name="com.kawai.mochi.StickerPackDetailsActivity"
             android:exported="false"
-            android:parentActivityName=".StickerPackListActivity"
+            android:parentActivityName="com.kawai.mochi.StickerPackListActivity"
             tools:ignore="UnusedAttribute">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="com.kawai.mochi.StickerPackListActivity" />
         </activity>
         <activity
-            android:name=".StickerPackInfoActivity"
+            android:name="com.kawai.mochi.StickerPackInfoActivity"
             android:exported="false"
             android:label="@string/title_activity_sticker_pack_info"
-            android:parentActivityName=".StickerPackDetailsActivity"
+            android:parentActivityName="com.kawai.mochi.StickerPackDetailsActivity"
             tools:ignore="UnusedAttribute">
             <meta-data
                 android:name="android.support.PARENT_ACTIVITY"
                 android:value="com.kawai.mochi.StickerPackDetailsActivity" />
         </activity>
         <activity
-            android:name=".SettingsActivity"
+            android:name="com.kawai.mochi.SettingsActivity"
             android:exported="false"
             android:label="Settings" />
         <activity
-            android:name=".EditStickerPackActivity"
+            android:name="com.kawai.mochi.EditStickerPackActivity"
             android:exported="false" />
         <activity
-            android:name=".ImportIndividualStickerActivity"
+            android:name="com.kawai.mochi.ImportIndividualStickerActivity"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
@@ -101,7 +101,7 @@
         </activity>
 
         <provider
-            android:name=".StickerContentProvider"
+            android:name="com.kawai.mochi.StickerContentProvider"
             android:authorities="${contentProviderAuthority}"
             android:enabled="true"
             android:exported="true"

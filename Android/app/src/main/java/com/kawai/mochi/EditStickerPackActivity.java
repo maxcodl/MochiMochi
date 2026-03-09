@@ -18,6 +18,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.textfield.TextInputEditText;
+import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -147,7 +148,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
             Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
             intent.setType("image/*");
             intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-            stickerPickerLauncher.launch(Intent.createChooser(intent, "Select stickers"));
+            stickerPickerLauncher.launch(Intent.createChooser(intent, getString(R.string.select_stickers_title)));
         });
 
         saveButton.setOnClickListener(v -> {
@@ -157,7 +158,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                 return;
             }
             String author = authorEdit.getText() != null ? authorEdit.getText().toString().trim() : "";
-            if (author.isEmpty()) author = "Unknown";
+            if (author.isEmpty()) author = getString(R.string.unknown_author);
             savePack(name, author, packIdentifier, stickerItems, trayIconUri);
         });
     }
@@ -184,7 +185,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                 EditStickerPackActivity activity = ref.get();
                 if (activity == null) return;
                 if (finalError != null) {
-                    Toast.makeText(activity, "Error: " + finalError, Toast.LENGTH_LONG).show();
+                    Toast.makeText(activity, getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
                 } else {
                     Toast.makeText(activity, activity.isEditMode ?
                             R.string.edit_saved : R.string.pack_created, Toast.LENGTH_SHORT).show();
@@ -201,7 +202,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
     }
 
     private void updateStickerCount() {
-        stickerCountText.setText(stickerItems.size() + " / " + MAX_STICKERS);
+        stickerCountText.setText(getString(R.string.sticker_count_format, stickerItems.size(), MAX_STICKERS));
     }
 
     @Override
@@ -226,7 +227,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
         final com.google.android.material.textfield.TextInputEditText input =
                 new com.google.android.material.textfield.TextInputEditText(this);
         input.setText(sb.toString());
-        input.setHint("Enter up to 3 emojis");
+        input.setHint(R.string.edit_emojis_hint);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
 
         android.widget.FrameLayout container = new android.widget.FrameLayout(this);
@@ -254,7 +255,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                     }
                     if (newEmojis.isEmpty()) newEmojis.add("\uD83D\uDE00"); // fallback: 😀
                     item.emojis = newEmojis;
-                    adapter.notifyItemChanged(position);
+                    adapter.notifyDataSetChanged();
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();
