@@ -44,6 +44,9 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     // POWER-OF-TWO RESOLUTION: 32px is 1/16th of 512px, which optimizes hardware downsampling
     private static final int LIST_DECODE_SIZE_PX = 32;
     private static final int LIST_ANIMATED_DECODE_SIZE_PX = 16;
+    // Grid stickers are decoded at 70% of their display size to cut memory and speed up loading.
+    // The expanded preview always uses full-res (handled separately in StickerPackDetailsActivity).
+    private static final float GRID_DECODE_SCALE = 0.70f;
 
     private List<Sticker> stickers;
     private String packIdentifier;
@@ -146,7 +149,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         holder.sticker = sticker;
         
         String thumbName = "thumbs/thumb_" + sticker.imageFileName;
-        int decodeSize = isGridMode ? previewSize : LIST_DECODE_SIZE_PX;
+        int decodeSize = isGridMode ? Math.round(previewSize * GRID_DECODE_SCALE) : LIST_DECODE_SIZE_PX;
         String cacheKey = packIdentifier + "/" + (isGridMode ? sticker.imageFileName : thumbName) + "@" + decodeSize;
 
         if (cacheKey.equals(holder.boundCacheKey)) {
@@ -184,7 +187,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         if (sticker.isAnimated && animationsEnabled && !isScrolling) {
             // In list mode, use thumbnail for animated preview to keep resolution low.
             Uri animatedSourceUri = isGridMode ? fullUri : thumbUri;
-            int animatedDecodeSize = isGridMode ? previewSize : LIST_ANIMATED_DECODE_SIZE_PX;
+            int animatedDecodeSize = isGridMode ? Math.round(previewSize * GRID_DECODE_SCALE) : LIST_ANIMATED_DECODE_SIZE_PX;
             bindAnimatedSticker(holder, animatedSourceUri, fullUri, animatedDecodeSize, token);
         }
 
@@ -199,7 +202,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
                 final Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, "thumbs/thumb_" + holder.sticker.imageFileName);
                 final Uri fullUri = StickerPackLoader.getStickerAssetUri(packIdentifier, holder.sticker.imageFileName);
                 Uri animatedSourceUri = isGridMode ? fullUri : thumbUri;
-                int animatedDecodeSize = isGridMode ? previewSize : LIST_ANIMATED_DECODE_SIZE_PX;
+                int animatedDecodeSize = isGridMode ? Math.round(previewSize * GRID_DECODE_SCALE) : LIST_ANIMATED_DECODE_SIZE_PX;
                 bindAnimatedSticker(holder, animatedSourceUri, fullUri, animatedDecodeSize, holder.bindToken);
             } else {
                 DraweeController controller = holder.draweeView.getController();
