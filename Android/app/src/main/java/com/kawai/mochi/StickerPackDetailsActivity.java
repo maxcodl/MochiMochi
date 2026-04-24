@@ -256,6 +256,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
         if (!expandedPreviewVisible) {
             expandedPreviewVisible = true;
+            if (stickerPreviewAdapter != null) stickerPreviewAdapter.setAnimationsPaused(true);
             expandedStickerOverlay.setVisibility(View.VISIBLE);
             expandedStickerCard.setVisibility(View.VISIBLE);
             expandedStickerOverlay.setAlpha(0f);
@@ -272,12 +273,14 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
             return;
         }
         expandedPreviewVisible = false;
+        if (stickerPreviewAdapter != null) stickerPreviewAdapter.setAnimationsPaused(false);
         expandedStickerOverlay.animate().alpha(0f).setDuration(100).withEndAction(() -> expandedStickerOverlay.setVisibility(View.INVISIBLE)).start();
         expandedStickerCard.animate().alpha(0f).scaleX(0.96f).scaleY(0.96f).setDuration(100).withEndAction(() -> expandedStickerCard.setVisibility(View.INVISIBLE)).start();
     }
 
     private void hideExpandedPreviewImmediate() {
         expandedPreviewVisible = false;
+        if (stickerPreviewAdapter != null) stickerPreviewAdapter.setAnimationsPaused(false);
         expandedStickerOverlay.setVisibility(View.INVISIBLE);
         expandedStickerCard.setVisibility(View.INVISIBLE);
         expandedStickerOverlay.setAlpha(0f);

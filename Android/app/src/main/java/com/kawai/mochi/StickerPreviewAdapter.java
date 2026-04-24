@@ -52,6 +52,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     private boolean isAnimatedPack;
     private boolean animationsEnabled;
     private boolean isScrolling;
+    private boolean isAnimationsPaused; // true while the expanded sticker overlay is visible
     private final boolean isGridMode;
     @Nullable
     private final StickerInteractionListener interactionListener;
@@ -83,6 +84,17 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     public void setScrolling(boolean isScrolling) {
         if (this.isScrolling != isScrolling) {
             this.isScrolling = isScrolling;
+            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
+        }
+    }
+
+    /**
+     * Pauses or resumes background animations without touching the scroll-pause flag.
+     * Call with {@code true} when an expanded preview overlay is shown, {@code false} when hidden.
+     */
+    public void setAnimationsPaused(boolean paused) {
+        if (this.isAnimationsPaused != paused) {
+            this.isAnimationsPaused = paused;
             notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
         }
     }
@@ -182,7 +194,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     private void updateContentState(@NonNull ViewHolder holder) {
         if (holder.sticker == null) return;
 
-        if (!isScrolling && animationsEnabled && holder.sticker.isAnimated) {
+        if (!isScrolling && !isAnimationsPaused && animationsEnabled && holder.sticker.isAnimated) {
             if (holder.draweeView.getController() == null) {
                 final Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, "thumbs/thumb_" + holder.sticker.imageFileName);
                 final Uri fullUri = StickerPackLoader.getStickerAssetUri(packIdentifier, holder.sticker.imageFileName);
