@@ -112,6 +112,19 @@ class StickerPackListActivity : AddStickerPackActivity() {
         itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
             override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder) = false
 
+            // Disable pull-to-refresh the moment a swipe gesture starts so the two
+            // gestures can't interfere with each other.
+            override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
+                super.onSelectedChanged(viewHolder, actionState)
+                swipeRefresh.isEnabled = actionState == ItemTouchHelper.ACTION_STATE_IDLE
+            }
+
+            // Re-enable pull-to-refresh once the finger lifts and the view snaps back.
+            override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                super.clearView(recyclerView, viewHolder)
+                swipeRefresh.isEnabled = true
+            }
+
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.bindingAdapterPosition
                 if (position in stickerPackList.indices) {
@@ -269,24 +282,33 @@ class StickerPackListActivity : AddStickerPackActivity() {
     private fun deletePack(position: Int) {
         if (position !in stickerPackList.indices) return
         val pack = stickerPackList[position]
-        
+
+        // Optimistic remove — update the UI instantly so the row disappears immediately.
+        stickerPackList.removeAt(position)
+        allStickerPacksListAdapter.notifyDataSetChanged()
+        updateEmptyState()
+        supportActionBar?.title = resources.getQuantityString(
+            R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+
         lifecycleScope.launch {
             try {
                 withContext(Dispatchers.IO) {
                     WastickerParser.deleteStickerPack(this@StickerPackListActivity, pack.identifier)
                     StickerContentProvider.getInstance()?.invalidateStickerPackList()
                 }
-                
-                stickerPackList.removeAt(position)
-                // notifyDataSetChanged ensures the RecyclerView fully re-lays-out after the
-                // ItemTouchHelper swipe; partial notify calls leave a ghost empty row.
-                allStickerPacksListAdapter.notifyDataSetChanged()
-                updateEmptyState()
-                supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
                 Toast.makeText(this@StickerPackListActivity, R.string.pack_deleted, Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(this@StickerPackListActivity, getString(R.string.error_with_message, e.message), Toast.LENGTH_LONG).show()
-                allStickerPacksListAdapter.notifyItemChanged(position)
+                // Roll back the optimistic remove on failure.
+                stickerPackList.add(position.coerceAtMost(stickerPackList.size), pack)
+                allStickerPacksListAdapter.notifyDataSetChanged()
+                updateEmptyState()
+                supportActionBar?.title = resources.getQuantityString(
+                    R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+                Toast.makeText(
+                    this@StickerPackListActivity,
+                    getString(R.string.error_with_message, e.message),
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }

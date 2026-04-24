@@ -202,6 +202,13 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     }
 
     private void setupInteractions(@NonNull ViewHolder holder, Sticker sticker, Uri fullUri) {
+        // Single tap — show the expanded preview immediately
+        holder.itemView.setOnClickListener(v -> {
+            if (interactionListener != null) {
+                interactionListener.onStickerHoldStarted(sticker, fullUri, sticker.isAnimated);
+            }
+        });
+        // Long press — same expanded preview (kept for muscle memory)
         holder.itemView.setOnLongClickListener(v -> {
             if (interactionListener != null) {
                 interactionListener.onStickerHoldStarted(sticker, fullUri, sticker.isAnimated);
