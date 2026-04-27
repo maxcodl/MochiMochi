@@ -22,7 +22,7 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
+import androidx.core.widget.NestedScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -62,7 +62,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     private LinearProgressIndicator progressBar;
     private TextView progressText;
     private MaterialCardView logCard;
-    private ScrollView logScroll;
+    private NestedScrollView logScroll;
     private TextView logTextView;
     private MaterialButton copyLogButton;
     private LinearLayout resultsSection;
