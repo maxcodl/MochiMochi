@@ -7,6 +7,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
 
@@ -67,7 +68,12 @@ public class TelegramConversionService extends Service {
         }
 
         ensureChannel();
-        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.telegram_conversion_notif_title), getString(R.string.telegram_conversion_notif_queued), true, 0, 0));
+        Notification notification = buildNotification(getString(R.string.telegram_conversion_notif_title), getString(R.string.telegram_conversion_notif_queued), true, 0, 0);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
 
         PENDING_TASKS.incrementAndGet();
 
