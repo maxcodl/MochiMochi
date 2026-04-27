@@ -32,12 +32,13 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:clipToPadding="false"
+        android:fillViewport="true"
         android:paddingBottom="32dp"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="match_parent"
             android:orientation="vertical"
             android:padding="16dp">
 
@@ -126,9 +127,7 @@
                         android:layout_height="wrap_content"
                         android:layout_marginTop="12dp"
                         android:text="@string/convert_button"
-                        app:cornerRadius="12dp"
-                        app:icon="@drawable/ic_telegram"
-                        app:iconGravity="start" />
+                        app:cornerRadius="12dp" />
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -157,7 +156,8 @@
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/tg_log_card"
                 android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_height="0dp"
+                android:layout_weight="1"
                 android:layout_marginBottom="16dp"
                 android:visibility="gone"
                 app:cardBackgroundColor="?attr/colorSurfaceVariant"
@@ -166,7 +166,7 @@
 
                 <LinearLayout
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_height="match_parent"
                     android:orientation="vertical">
 
                     <!-- Log card header -->
@@ -192,16 +192,19 @@
                             android:id="@+id/tg_copy_log_button"
                             style="@style/Widget.Material3.Button.TextButton"
                             android:layout_width="wrap_content"
-                            android:layout_height="32dp"
+                            android:layout_height="wrap_content"
+                            android:minHeight="48dp"
+                            android:paddingHorizontal="16dp"
                             android:text="@string/copy_log"
-                            android:textSize="11sp" />
+                            android:textSize="12sp" />
                     </LinearLayout>
 
                     <!-- Log scroll area — fixed height so it doesn't take over the screen -->
-                    <ScrollView
+                    <androidx.core.widget.NestedScrollView
                         android:id="@+id/tg_log_scroll"
                         android:layout_width="match_parent"
-                        android:layout_height="220dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
                         android:fadeScrollbars="true"
                         android:overScrollMode="never"
                         android:scrollbars="vertical">
@@ -217,9 +220,8 @@
                             android:paddingBottom="12dp"
                             android:textAppearance="?attr/textAppearanceBodySmall"
                             android:textColor="?attr/colorOnSurfaceVariant"
-                            android:textSize="11sp"
-                            tools:text="Fetching pack info…" />
-                    </ScrollView>
+                            android:textSize="11sp" />
+                    </androidx.core.widget.NestedScrollView>
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>

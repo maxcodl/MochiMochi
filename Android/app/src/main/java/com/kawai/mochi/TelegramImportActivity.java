@@ -1,5 +1,8 @@
 package com.kawai.mochi;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import androidx.core.app.ActivityCompat;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -48,6 +51,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TelegramImportActivity extends AddStickerPackActivity {
 
     public static final String EXTRA_TASK_ID = "extra_task_id";
+    private static final int REQUEST_NOTIFICATION_PERMISSION = 1001;
 
     // Views
     private TextInputEditText urlInput;
@@ -152,6 +156,12 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             authorInput.setText(lastAuthor);
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATION_PERMISSION);
+            }
+        }
+
         convertButton.setOnClickListener(v -> startConversion());
         copyLogButton.setOnClickListener(v -> copyLogToClipboard());
         doneButton.setOnClickListener(v -> {
@@ -175,6 +185,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
                 if (s != null && s.length() > 0) {
                     mainHandler.postDelayed(fetchPackNameRunnable, 450);
                 }
+                updateConvertButtonState();
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -185,6 +196,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 if (suppressPackNameWatcher) return;
                 packNameManuallyEdited = true;
+                updateConvertButtonState();
             }
             @Override public void afterTextChanged(Editable s) { }
         });
@@ -194,6 +206,8 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             activeTaskId = taskId;
             renderTaskSnapshot();
         }
+        
+        updateConvertButtonState();
     }
 
     @Override
@@ -373,7 +387,6 @@ public class TelegramImportActivity extends AddStickerPackActivity {
 
     private void setConvertingUi(boolean running) {
         converting.set(running);
-        convertButton.setEnabled(!running);
         urlInput.setEnabled(!running);
         packNameInput.setEnabled(!running);
         authorInput.setEnabled(!running);
@@ -383,6 +396,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         if (!running) {
             progressBar.setIndeterminate(false);
         }
+        updateConvertButtonState();
     }
 
     private void addResultCard(TelegramConverter.ImportedPackResult result) {
@@ -445,5 +459,16 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         packNameInput.setSelection(fetchedTitle.length());
         suppressPackNameWatcher = false;
         lastAutoFilledPackName = fetchedTitle;
+        updateConvertButtonState();
+    }
+
+    private void updateConvertButtonState() {
+        if (converting.get() || convertButton == null) {
+            if (convertButton != null) convertButton.setEnabled(false);
+            return;
+        }
+        String url = urlInput != null && urlInput.getText() != null ? urlInput.getText().toString().trim() : "";
+        String pack = packNameInput != null && packNameInput.getText() != null ? packNameInput.getText().toString().trim() : "";
+        convertButton.setEnabled(!url.isEmpty() && !pack.isEmpty());
     }
 }
