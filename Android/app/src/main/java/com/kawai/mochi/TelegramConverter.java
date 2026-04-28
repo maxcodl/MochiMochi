@@ -14,6 +14,8 @@ import com.airbnb.lottie.LottieComposition;
 import com.airbnb.lottie.LottieCompositionFactory;
 import com.airbnb.lottie.LottieDrawable;
 import com.airbnb.lottie.LottieTask;
+import com.facebook.animated.webp.WebPImage;
+import com.facebook.imagepipeline.common.ImageDecodeOptions;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -240,17 +242,25 @@ public class TelegramConverter {
 
             executor.submit(() -> {
                 try {
+                    boolean animatedWebP = isAnimatedWebPBytes(ds.rawBytes);
+                    boolean treatAsAnimated = ds.isTgsAnim || ds.isVideoAnim || animatedWebP;
+
                     byte[] converted;
                     if (ds.isTgsAnim) {
                         converted = convertTgsSticker(context, ds.rawBytes);
                     } else if (ds.isVideoAnim) {
                         converted = convertVideoSticker(context, ds.rawBytes);
+                    } else if (animatedWebP) {
+                        if (!ds.isAnimated) {
+                            log(callback, "Sticker " + (index + 1) + " is animated WebP bytes despite Telegram flags; preserving it as animated");
+                        }
+                        converted = ds.rawBytes;
                     } else {
                         converted = convertStaticSticker(ds.rawBytes);
                     }
 
-                    StickerEntry entry = new StickerEntry(ds.fileId, converted, ds.emojis, ds.isAnimated);
-                    if (ds.isAnimated) animatedEntries.add(entry);
+                    StickerEntry entry = new StickerEntry(ds.fileId, converted, ds.emojis, treatAsAnimated);
+                    if (treatAsAnimated) animatedEntries.add(entry);
                     else staticEntries.add(entry);
 
                 } catch (Exception e) {
@@ -571,6 +581,18 @@ public class TelegramConverter {
         }
         if (AnimatedWebPWriter.countFrames(encoded) < 2) {
             throw new IOException("Converted animated output has fewer than 2 frames");
+        }
+    }
+
+    private static boolean isAnimatedWebPBytes(byte[] data) {
+        if (data == null || data.length == 0) {
+            return false;
+        }
+        try {
+            WebPImage webPImage = WebPImage.createFromByteArray(data, ImageDecodeOptions.defaults());
+            return webPImage != null && webPImage.getFrameCount() > 1;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
