@@ -28,6 +28,7 @@ import android.widget.Toast;
 
 import androidx.appcompat.widget.Toolbar;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
@@ -65,6 +66,11 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     private NestedScrollView logScroll;
     private TextView logTextView;
     private MaterialButton copyLogButton;
+    private MaterialButton toggleAdvancedLogButton;
+    private MaterialCardView advancedLogCard;
+    private NestedScrollView advancedLogScroll;
+    private TextView advancedLogTextView;
+    private MaterialButton copyAdvancedLogButton;
     private LinearLayout resultsSection;
     private LinearLayout resultsContainer;
     private MaterialButton doneButton;
@@ -80,6 +86,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     private String lastAutoFilledPackName = "";
     private int metadataRequestId = 0;
     private String activeTaskId;
+    private boolean advancedLogsVisible = false;
 
     private final BroadcastReceiver taskUpdateReceiver = new BroadcastReceiver() {
         @Override
@@ -145,6 +152,10 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         logCard = findViewById(R.id.tg_log_card);
         logScroll = findViewById(R.id.tg_log_scroll);
         logTextView = findViewById(R.id.tg_log_text);
+        toggleAdvancedLogButton = findViewById(R.id.tg_toggle_advanced_log_button);
+        advancedLogCard = findViewById(R.id.tg_advanced_log_card);
+        advancedLogScroll = findViewById(R.id.tg_advanced_log_scroll);
+        advancedLogTextView = findViewById(R.id.tg_advanced_log_text);
         
         logScroll.setOnTouchListener((v, event) -> {
             int action = event.getAction();
@@ -155,8 +166,19 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             }
             return false;
         });
+
+        advancedLogScroll.setOnTouchListener((v, event) -> {
+            int action = event.getAction();
+            if (action == android.view.MotionEvent.ACTION_DOWN || action == android.view.MotionEvent.ACTION_MOVE) {
+                v.getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (action == android.view.MotionEvent.ACTION_UP || action == android.view.MotionEvent.ACTION_CANCEL) {
+                v.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
         
         copyLogButton = findViewById(R.id.tg_copy_log_button);
+        copyAdvancedLogButton = findViewById(R.id.tg_copy_advanced_log_button);
         resultsSection = findViewById(R.id.tg_results_section);
         resultsContainer = findViewById(R.id.tg_results_container);
         doneButton = findViewById(R.id.tg_done_button);
@@ -175,6 +197,8 @@ public class TelegramImportActivity extends AddStickerPackActivity {
 
         convertButton.setOnClickListener(v -> startConversion());
         copyLogButton.setOnClickListener(v -> copyLogToClipboard());
+        toggleAdvancedLogButton.setOnClickListener(v -> toggleAdvancedLogs());
+        copyAdvancedLogButton.setOnClickListener(v -> copyAdvancedLogToClipboard());
         doneButton.setOnClickListener(v -> {
             setResult(RESULT_OK);
             finish();
@@ -352,6 +376,14 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         logCard.setVisibility(View.VISIBLE);
         logTextView.setText(logsBuilder.toString());
 
+        StringBuilder advancedLogsBuilder = new StringBuilder();
+        for (String line : task.advancedLogs) {
+            advancedLogsBuilder.append(line).append('\n');
+        }
+        advancedLogTextView.setText(advancedLogsBuilder.toString());
+        advancedLogCard.setVisibility(advancedLogsVisible ? View.VISIBLE : View.GONE);
+        toggleAdvancedLogButton.setText(advancedLogsVisible ? R.string.hide_advanced_logs : R.string.advanced_logs);
+
         if (task.status == ConversionTaskManager.Status.RUNNING || task.status == ConversionTaskManager.Status.QUEUED) {
             setConvertingUi(true);
             if (task.total > 0) {
@@ -419,6 +451,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         TextView badge = card.findViewById(R.id.result_type_badge);
         TextView count = card.findViewById(R.id.result_sticker_count);
         MaterialButton addBtn = card.findViewById(R.id.result_add_to_whatsapp);
+        MaterialButton exportBtn = card.findViewById(R.id.result_export_button);
 
         icon.setImageResource(result.isAnimated ? R.drawable.animated_pack_indicator : R.drawable.ic_fab_add);
         name.setText(result.name);
@@ -427,6 +460,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
                 R.plurals.sticker_count_plural, result.stickerCount, result.stickerCount));
 
         addBtn.setOnClickListener(v -> addStickerPackToWhatsApp(result.identifier, result.name));
+        exportBtn.setOnClickListener(v -> exportConvertedPack(result.identifier, result.name));
 
         resultsContainer.addView(card);
     }
@@ -448,6 +482,43 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         if (cm != null) {
             cm.setPrimaryClip(ClipData.newPlainText("Conversion Log", logTextView.getText()));
             Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void copyAdvancedLogToClipboard() {
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) {
+            cm.setPrimaryClip(ClipData.newPlainText("Advanced Conversion Log", advancedLogTextView.getText()));
+            Toast.makeText(this, R.string.copied_to_clipboard, Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void exportConvertedPack(String identifier, String displayName) {
+        try {
+            java.io.File exportFile = WastickerParser.exportStickerPackZip(this, identifier);
+            if (exportFile == null || !exportFile.exists()) {
+                throw new java.io.IOException("Export file could not be created");
+            }
+
+            String authority = getPackageName() + ".fileprovider";
+            android.net.Uri uri = FileProvider.getUriForFile(this, authority, exportFile);
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("application/zip");
+            shareIntent.putExtra(Intent.EXTRA_STREAM, uri);
+            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            shareIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            startActivity(Intent.createChooser(shareIntent, getString(R.string.export_button) + ": " + displayName));
+        } catch (Exception e) {
+            Toast.makeText(this, getString(R.string.error_with_message, e.getMessage()), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void toggleAdvancedLogs() {
+        advancedLogsVisible = !advancedLogsVisible;
+        renderTaskSnapshot();
+        if (advancedLogsVisible && advancedLogScroll != null) {
+            advancedLogScroll.post(() -> advancedLogScroll.fullScroll(View.FOCUS_DOWN));
         }
     }
 

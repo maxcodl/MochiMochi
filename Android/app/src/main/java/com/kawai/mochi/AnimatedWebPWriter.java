@@ -135,14 +135,16 @@ public class AnimatedWebPWriter {
         try {
             // 1. Encode every frame to static WebP bytes.
             byte[][] frameData = new byte[frames.size()][];
-            // Use lossy frame encoding for broad WhatsApp compatibility and predictable size
-            // reduction via the quality ladder.
+            // Use lossless frame compression when available to preserve alpha fidelity.
+            // Lossy WebP frame encoding on some Android devices can introduce opaque black
+            // backgrounds when those frames are later repackaged into ANMF chunks.
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                    ? Bitmap.CompressFormat.WEBP_LOSSY
+                    ? Bitmap.CompressFormat.WEBP_LOSSLESS
                     : Bitmap.CompressFormat.WEBP;
+            int effectiveQuality = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? 100 : Math.max(quality, 100);
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
-                frames.get(i).compress(format, quality, bos);
+                frames.get(i).compress(format, effectiveQuality, bos);
                 frameData[i] = bos.toByteArray();
             }
 
@@ -204,7 +206,7 @@ public class AnimatedWebPWriter {
         ByteArrayOutputStream out = new ByteArrayOutputStream(18);
         putFourCC(out, "VP8X");
         putLE32(out, 10);              // chunk size
-        out.write(0x0A);              // flags: animation + alpha (matches WhatsApp stickers)
+        out.write(0x12);              // flags: alpha + animation
         out.write(0); out.write(0); out.write(0); // reserved
         putLE24(out, width - 1);       // canvas width − 1
         putLE24(out, height - 1);      // canvas height − 1
@@ -356,20 +358,13 @@ public class AnimatedWebPWriter {
         }
         java.util.List<Bitmap> scaled = new java.util.ArrayList<>(frames.size());
         for (Bitmap f : frames) {
-            int canvasW = f.getWidth();
-            int canvasH = f.getHeight();
-            int contentW = Math.max(16, Math.round(canvasW * scale));
-            int contentH = Math.max(16, Math.round(canvasH * scale));
-
-            Bitmap out = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888);
-            android.graphics.Canvas c = new android.graphics.Canvas(out);
-            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
-            android.graphics.Rect src = new android.graphics.Rect(0, 0, canvasW, canvasH);
-            int left = (canvasW - contentW) / 2;
-            int top = (canvasH - contentH) / 2;
-            android.graphics.Rect dst = new android.graphics.Rect(left, top, left + contentW, top + contentH);
-            c.drawBitmap(f, src, dst, p);
-            scaled.add(out);
+            int w = Math.max(64, Math.round(f.getWidth() * scale));
+            int h = Math.max(64, Math.round(f.getHeight() * scale));
+            if (w == f.getWidth() && h == f.getHeight()) {
+                scaled.add(f);
+            } else {
+                scaled.add(Bitmap.createScaledBitmap(f, w, h, true));
+            }
         }
         return scaled;
     }

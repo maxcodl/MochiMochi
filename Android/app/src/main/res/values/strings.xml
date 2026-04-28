@@ -149,6 +149,10 @@
     <string name="processing_stickers_title">Processing Stickers...</string>
     <string name="done">Done</string>
     <string name="copy_log">Copy Log</string>
+    <string name="advanced_logs">Advanced logs</string>
+    <string name="advanced_logs_title">Advanced conversion log</string>
+    <string name="hide_advanced_logs">Hide advanced logs</string>
+    <string name="export_button">Export</string>
     <string name="donate_title">❤️ Donate</string>
     <string name="donate_message">I know u poor so send your kidney to Max ❤️</string>
     <string name="donate_positive">Gladly 💌</string>
