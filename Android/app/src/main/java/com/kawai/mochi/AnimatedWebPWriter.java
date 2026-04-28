@@ -52,29 +52,34 @@ public class AnimatedWebPWriter {
             frames = java.util.Arrays.asList(frames.get(0), frames.get(0));
         }
 
-        int[] qualityLadder = {72, 58, 46, 34, 24};
-        int[] fallbackLadder = {50, 38, 28, 20};
+        int[] qualityLadder = {76, 68, 60, 52, 44, 36, 28, 22, 16};
+        float[] scalePasses = {1.00f, 0.92f, 0.86f, 0.80f, 0.74f, 0.68f};
         int[] decimations   = {1, 2, 3, 4};
 
+        // Multi-level strategy:
+        // 1) keep full frame cadence and progressively lower quality
+        // 2) if still oversized, reduce spatial resolution while preserving timing
+        // 3) only then use frame decimation as a last resort
         for (int decimation : decimations) {
-            List<Bitmap> cur = decimate(frames, decimation);
-            if (cur.size() < 2) continue;
             int curDuration = Math.min(frameDurationMs * decimation, 1000);
+            List<Bitmap> decimatedFrames = decimate(frames, decimation);
+            if (decimatedFrames.size() < 2) continue;
 
-            for (int quality : qualityLadder) {
-                byte[] result = tryEncode(cur, curDuration, quality);
-                if (result != null && result.length <= MAX_SIZE_BYTES) {
-                    Log.d(TAG, "encode: success frames=" + cur.size()
-                            + " quality=" + quality + " decimation=" + decimation
-                            + " out=" + result.length);
-                    return result;
-                }
-            }
-
-            for (int quality : fallbackLadder) {
-                byte[] result = tryEncode(cur, curDuration, quality);
-                if (result != null && result.length <= MAX_SIZE_BYTES) {
-                    return result;
+            for (float scale : scalePasses) {
+                List<Bitmap> curFrames = scaleFramesIfNeeded(decimatedFrames, scale);
+                try {
+                    for (int quality : qualityLadder) {
+                        byte[] result = tryEncode(curFrames, curDuration, quality);
+                        if (result != null && result.length <= MAX_SIZE_BYTES) {
+                            Log.d(TAG, "encode: success frames=" + curFrames.size()
+                                    + " quality=" + quality + " decimation=" + decimation
+                                    + " scale=" + scale
+                                    + " out=" + result.length);
+                            return result;
+                        }
+                    }
+                } finally {
+                    recycleScaledFrames(curFrames, decimatedFrames);
                 }
             }
         }
@@ -130,6 +135,9 @@ public class AnimatedWebPWriter {
         try {
             // 1. Encode every frame to static (lossy) WebP bytes
             byte[][] frameData = new byte[frames.size()][];
+            // Keep lossy frame encoding for size efficiency. Animated output is constrained
+            // to <= 500 KB, and WEBP_LOSSLESS frequently exceeds this envelope even with
+            // aggressive frame decimation, causing full-pack conversion failures.
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     ? Bitmap.CompressFormat.WEBP_LOSSY
                     : Bitmap.CompressFormat.WEBP;
@@ -335,5 +343,32 @@ public class AnimatedWebPWriter {
         java.util.List<Bitmap> result = new java.util.ArrayList<>();
         for (int i = 0; i < frames.size(); i += step) result.add(frames.get(i));
         return result;
+    }
+
+    private static List<Bitmap> scaleFramesIfNeeded(List<Bitmap> frames, float scale) {
+        if (scale >= 0.999f) {
+            return frames;
+        }
+        java.util.List<Bitmap> scaled = new java.util.ArrayList<>(frames.size());
+        for (Bitmap f : frames) {
+            int w = Math.max(64, Math.round(f.getWidth() * scale));
+            int h = Math.max(64, Math.round(f.getHeight() * scale));
+            if (w == f.getWidth() && h == f.getHeight()) {
+                scaled.add(f);
+            } else {
+                scaled.add(Bitmap.createScaledBitmap(f, w, h, true));
+            }
+        }
+        return scaled;
+    }
+
+    private static void recycleScaledFrames(List<Bitmap> maybeScaled, List<Bitmap> original) {
+        if (maybeScaled == original) return;
+        for (Bitmap bmp : maybeScaled) {
+            if (bmp == null || bmp.isRecycled()) continue;
+            if (!original.contains(bmp)) {
+                bmp.recycle();
+            }
+        }
     }
 }
