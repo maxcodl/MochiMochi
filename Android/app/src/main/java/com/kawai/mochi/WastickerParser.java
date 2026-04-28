@@ -16,6 +16,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 public class WastickerParser {
     private static final String TAG = "WastickerParser";
@@ -452,6 +454,48 @@ public class WastickerParser {
         }
     }
 
+    private static byte[] readPackFileBytes(Context context, String identifier, String fileName, DocumentFile packDirDoc) throws IOException {
+        if (fileName == null || fileName.isEmpty()) return null;
+
+        if (isCustomPathUri(context)) {
+            DocumentFile packDir = packDirDoc;
+            if (packDir == null) {
+                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)));
+                packDir = root != null ? root.findFile(identifier) : null;
+            }
+            if (packDir == null) return null;
+
+            DocumentFile file = packDir.findFile(fileName);
+            if (file == null) return null;
+            try (InputStream is = context.getContentResolver().openInputStream(file.getUri())) {
+                if (is == null) return null;
+                return readAllBytes(is);
+            }
+        }
+
+        File rootFile = new File(new File(getStickerFolderPath(context), identifier), fileName);
+        if (!rootFile.exists()) return null;
+        try (InputStream is = new FileInputStream(rootFile)) {
+            return readAllBytes(is);
+        }
+    }
+
+    private static byte[] readAllBytes(InputStream is) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int len;
+        while ((len = is.read(buffer)) > 0) {
+            bos.write(buffer, 0, len);
+        }
+        return bos.toByteArray();
+    }
+
+    private static void putZipEntry(ZipOutputStream zos, String name, byte[] data) throws IOException {
+        zos.putNextEntry(new ZipEntry(name));
+        zos.write(data);
+        zos.closeEntry();
+    }
+
     private static void unzip(InputStream is, File destDir) throws IOException {
         ZipInputStream zis = new ZipInputStream(is);
         ZipEntry entry;
@@ -517,6 +561,66 @@ public class WastickerParser {
             android.util.Log.e(TAG, "isAnimatedWebPPublic: error for " + identifier + "/" + fileName, e);
             return false;
         }
+    }
+
+    public static File exportStickerPackZip(Context context, String identifier) throws IOException, JSONException {
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) {
+            throw new IOException("No sticker packs found");
+        }
+
+        JSONObject packJson = null;
+        for (int i = 0; i < masterPacks.length(); i++) {
+            JSONObject candidate = masterPacks.getJSONObject(i);
+            if (identifier.equals(candidate.optString("identifier"))) {
+                packJson = candidate;
+                break;
+            }
+        }
+        if (packJson == null) {
+            throw new IOException("Sticker pack not found: " + identifier);
+        }
+
+        File exportDir = new File(context.getCacheDir(), "exports");
+        if (!exportDir.exists()) exportDir.mkdirs();
+        String safeName = identifier.replaceAll("[^a-zA-Z0-9._-]", "_");
+        if (safeName.isEmpty()) safeName = "sticker_pack";
+        File exportFile = File.createTempFile(safeName + "_", ".wasticker", exportDir);
+
+        JSONObject exportRoot = new JSONObject();
+        JSONArray exportPacks = new JSONArray();
+        exportPacks.put(packJson);
+        exportRoot.put("sticker_packs", exportPacks);
+
+        try (ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(exportFile)))) {
+            putZipEntry(zos, "contents.json", exportRoot.toString(2).getBytes("UTF-8"));
+
+            String rootPath = getStickerFolderPath(context);
+            DocumentFile rootDoc = isCustomPathUri(context) ? DocumentFile.fromTreeUri(context, Uri.parse(rootPath)) : null;
+            DocumentFile packDirDoc = rootDoc != null ? rootDoc.findFile(identifier) : null;
+
+            String trayFile = packJson.optString("tray_image_file", "tray.png");
+            byte[] trayBytes = readPackFileBytes(context, identifier, trayFile, packDirDoc);
+            if (trayBytes != null) {
+                putZipEntry(zos, trayFile, trayBytes);
+            }
+
+            JSONArray stickers = packJson.optJSONArray("stickers");
+            if (stickers != null) {
+                for (int i = 0; i < stickers.length(); i++) {
+                    JSONObject sticker = stickers.getJSONObject(i);
+                    String fileName = sticker.optString("image_file", "");
+                    if (fileName.isEmpty()) continue;
+                    byte[] stickerBytes = readPackFileBytes(context, identifier, fileName, packDirDoc);
+                    if (stickerBytes != null) {
+                        putZipEntry(zos, fileName, stickerBytes);
+                    }
+                }
+            }
+        }
+
+        return exportFile;
     }
 
     public static void savePack(Context context, String name, String author, String identifier,

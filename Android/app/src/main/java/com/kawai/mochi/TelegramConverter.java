@@ -5,6 +5,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.media.MediaMetadataRetriever;
 import android.util.Log;
 import android.os.Build;
@@ -14,8 +17,9 @@ import com.airbnb.lottie.LottieComposition;
 import com.airbnb.lottie.LottieCompositionFactory;
 import com.airbnb.lottie.LottieDrawable;
 import com.airbnb.lottie.LottieTask;
-import com.facebook.imagepipeline.animated.base.AnimatedImageFrame;
+import com.facebook.animated.webp.WebPFrame;
 import com.facebook.animated.webp.WebPImage;
+import com.facebook.imagepipeline.animated.base.AnimatedDrawableFrameInfo;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 
 import org.json.JSONArray;
@@ -252,9 +256,6 @@ public class TelegramConverter {
                     } else if (ds.isVideoAnim) {
                         converted = convertVideoSticker(context, ds.rawBytes);
                     } else if (animatedWebP) {
-                        if (!ds.isAnimated) {
-                            log(callback, "Sticker " + (index + 1) + " is animated WebP bytes despite Telegram flags; re-encoding as animated");
-                        }
                         converted = convertAnimatedWebPSticker(ds.rawBytes);
                     } else {
                         converted = convertStaticSticker(ds.rawBytes);
@@ -598,67 +599,74 @@ public class TelegramConverter {
     }
 
     private static byte[] convertAnimatedWebPSticker(byte[] webpData) throws IOException {
-        WebPImage webPImage;
-        try {
-            webPImage = WebPImage.createFromByteArray(webpData, ImageDecodeOptions.defaults());
-        } catch (Exception e) {
-            throw new IOException("Failed to parse animated WebP sticker", e);
-        }
-        if (webPImage == null) {
-            throw new IOException("Failed to parse animated WebP sticker");
+        WebPImage image = WebPImage.createFromByteArray(webpData, ImageDecodeOptions.defaults());
+        if (image == null) {
+            throw new IOException("Failed to decode animated WebP sticker");
         }
 
-        int frameCount = Math.max(1, webPImage.getFrameCount());
-        int[] durations = webPImage.getFrameDurations();
-        int frameDurationMs = 100;
-        if (durations != null && durations.length > 0) {
-            long total = 0L;
-            int valid = 0;
-            for (int d : durations) {
-                if (d > 0) {
-                    total += d;
-                    valid++;
-                }
-            }
-            if (valid > 0) {
-                frameDurationMs = Math.max(8, (int) (total / valid));
-            }
+        int frameCount = image.getFrameCount();
+        if (frameCount < 2) {
+            throw new IOException("Animated WebP sticker contains fewer than 2 frames");
         }
 
         List<Bitmap> frames = new ArrayList<>(Math.min(frameCount, MAX_FRAMES));
-        for (int i = 0; i < frameCount && frames.size() < MAX_FRAMES; i++) {
-            AnimatedImageFrame frame = null;
+        int[] durations = image.getFrameDurations();
+        int totalDuration = 0;
+        int imageWidth = Math.max(1, image.getWidth());
+        int imageHeight = Math.max(1, image.getHeight());
+
+        Bitmap composed = Bitmap.createBitmap(imageWidth, imageHeight, Bitmap.Config.ARGB_8888);
+        Canvas composedCanvas = new Canvas(composed);
+        Paint clearPaint = new Paint();
+        clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+
+        int step = Math.max(1, (int) Math.ceil((double) frameCount / MAX_FRAMES));
+
+        for (int i = 0; i < frameCount; i += step) {
+            WebPFrame frame = image.getFrame(i);
             try {
-                frame = webPImage.getFrame(i);
-                Bitmap raw = Bitmap.createBitmap(
-                        webPImage.getWidth(),
-                        webPImage.getHeight(),
-                        Bitmap.Config.ARGB_8888
-                );
-                raw.eraseColor(Color.TRANSPARENT);
-                frame.renderFrame(webPImage.getWidth(), webPImage.getHeight(), raw);
-                Bitmap canvas = makeCanvas(raw, STICKER_SIZE);
-                raw.recycle();
-                frames.add(canvas);
+                AnimatedDrawableFrameInfo info = image.getFrameInfo(i);
+
+                int frameX = Math.max(0, info.xOffset);
+                int frameY = Math.max(0, info.yOffset);
+                int frameW = Math.min(Math.max(1, info.width), imageWidth - frameX);
+                int frameH = Math.min(Math.max(1, info.height), imageHeight - frameY);
+
+                if (info.blendOperation == AnimatedDrawableFrameInfo.BlendOperation.NO_BLEND
+                        && frameW > 0 && frameH > 0) {
+                    composedCanvas.drawRect(frameX, frameY, frameX + frameW, frameY + frameH, clearPaint);
+                }
+
+                Bitmap rendered = Bitmap.createBitmap(frameW, frameH, Bitmap.Config.ARGB_8888);
+                frame.renderFrame(frameW, frameH, rendered);
+                composedCanvas.drawBitmap(rendered, frameX, frameY, null);
+                rendered.recycle();
+
+                frames.add(makeCanvas(composed, STICKER_SIZE));
+
+                if (info.disposalMethod == AnimatedDrawableFrameInfo.DisposalMethod.DISPOSE_TO_BACKGROUND
+                        && frameW > 0 && frameH > 0) {
+                    composedCanvas.drawRect(frameX, frameY, frameX + frameW, frameY + frameH, clearPaint);
+                }
+
+                int durationMs = (durations != null && i < durations.length) ? durations[i] : frame.getDurationMs();
+                if (durationMs > 0) {
+                    totalDuration += durationMs * step;
+                }
             } finally {
-                if (frame != null) frame.dispose();
+                frame.dispose();
             }
         }
 
-        if (frames.isEmpty()) {
-            throw new IOException("Animated WebP produced no decodable frames");
-        }
-        if (frames.size() == 1) {
-            Bitmap duplicate = frames.get(0).copy(Bitmap.Config.ARGB_8888, true);
-            if (duplicate != null) {
-                int px = duplicate.getPixel(0, 0);
-                int alpha = (px >>> 24) & 0xFF;
-                int rgb = px & 0x00FFFFFF;
-                duplicate.setPixel(0, 0, ((alpha == 0 ? 1 : 0) << 24) | rgb);
-                frames.add(duplicate);
-            }
+        composed.recycle();
+
+        if (frames.size() < 2) {
+            throw new IOException("Animated WebP sticker produced too few rendered frames");
         }
 
+        int frameDurationMs = totalDuration > 0
+                ? Math.max(8, totalDuration / frames.size())
+                : 100;
         return AnimatedWebPWriter.encode(frames, frameDurationMs);
     }
 
