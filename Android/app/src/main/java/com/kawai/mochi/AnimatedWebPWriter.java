@@ -133,7 +133,7 @@ public class AnimatedWebPWriter {
 
     private static byte[] tryEncode(List<Bitmap> frames, int durationMs, int quality) {
         try {
-            // 1. Encode every frame to static (lossy) WebP bytes
+            // 1. Encode every frame to static WebP bytes.
             byte[][] frameData = new byte[frames.size()][];
             // Use lossless frame compression when available to preserve alpha fidelity.
             // Lossy WebP frame encoding on some Android devices can introduce opaque black
@@ -141,9 +141,10 @@ public class AnimatedWebPWriter {
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     ? Bitmap.CompressFormat.WEBP_LOSSLESS
                     : Bitmap.CompressFormat.WEBP;
+            int effectiveQuality = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? 100 : Math.max(quality, 100);
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
-                frames.get(i).compress(format, quality, bos);
+                frames.get(i).compress(format, effectiveQuality, bos);
                 frameData[i] = bos.toByteArray();
             }
 
@@ -276,10 +277,7 @@ public class AnimatedWebPWriter {
 
         while (pos + 8 <= webpBytes.length) {
             String fourcc = new String(webpBytes, pos, 4, java.nio.charset.StandardCharsets.US_ASCII);
-            int size = (webpBytes[pos + 4] & 0xFF)
-                    | ((webpBytes[pos + 5] & 0xFF) << 8)
-                    | ((webpBytes[pos + 6] & 0xFF) << 16)
-                    | ((webpBytes[pos + 7] & 0xFF) << 24);
+            int size = readLE32(webpBytes, pos + 4);
 
             if (size < 0 || pos + 8 + size > webpBytes.length) {
                 break;
@@ -288,7 +286,9 @@ public class AnimatedWebPWriter {
             int paddedSize = size + (size & 1);
             int chunkTotal = 8 + paddedSize;
 
-            if ("ALPH".equals(fourcc)) {
+            if ("VP8X".equals(fourcc)) {
+                // Extended header chunk; keep scanning for the actual frame chunk.
+            } else if ("ALPH".equals(fourcc)) {
                 pendingAlph = new byte[chunkTotal];
                 System.arraycopy(webpBytes, pos, pendingAlph, 0, chunkTotal);
             } else if ("VP8 ".equals(fourcc) || "VP8L".equals(fourcc)) {
@@ -307,6 +307,13 @@ public class AnimatedWebPWriter {
         }
 
         throw new IOException("No VP8/VP8L frame chunk found");
+    }
+
+    private static int readLE32(byte[] data, int offset) {
+        return (data[offset] & 0xFF)
+                | ((data[offset + 1] & 0xFF) << 8)
+                | ((data[offset + 2] & 0xFF) << 16)
+                | ((data[offset + 3] & 0xFF) << 24);
     }
 
     // ── Utility writers ───────────────────────────────────────────────────────

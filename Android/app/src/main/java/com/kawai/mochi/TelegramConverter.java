@@ -865,6 +865,7 @@ public class TelegramConverter {
      */
     private static Bitmap makeCanvas(Bitmap src, int size) {
         Bitmap canvas = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+        canvas.eraseColor(Color.TRANSPARENT);
         Canvas c = new Canvas(canvas);
         float scale = Math.min((float) size / src.getWidth(), (float) size / src.getHeight());
         float dx    = (size - src.getWidth()  * scale) * 0.5f;
