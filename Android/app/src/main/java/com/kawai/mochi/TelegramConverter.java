@@ -252,9 +252,9 @@ public class TelegramConverter {
                         converted = convertVideoSticker(context, ds.rawBytes);
                     } else if (animatedWebP) {
                         if (!ds.isAnimated) {
-                            log(callback, "Sticker " + (index + 1) + " is animated WebP bytes despite Telegram flags; re-encoding as animated");
+                            log(callback, "Sticker " + (index + 1) + " is animated WebP bytes despite Telegram flags; preserving source animation");
                         }
-                        converted = convertAnimatedWebPSticker(ds.rawBytes);
+                        converted = ds.rawBytes;
                     } else {
                         converted = convertStaticSticker(ds.rawBytes);
                     }

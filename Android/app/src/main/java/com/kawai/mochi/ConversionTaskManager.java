@@ -48,6 +48,7 @@ public class ConversionTaskManager {
         public int total;
         public String error;
         public final List<String> logs;
+        public final List<String> advancedLogs;
         public final List<TaskPackResult> results;
 
         JSONObject toJson() throws JSONException {
@@ -64,6 +65,9 @@ public class ConversionTaskManager {
             JSONArray logsArr = new JSONArray();
             for (String log : logs) logsArr.put(log);
             obj.put("logs", logsArr);
+            JSONArray advancedLogsArr = new JSONArray();
+            for (String log : advancedLogs) advancedLogsArr.put(log);
+            obj.put("advanced_logs", advancedLogsArr);
             JSONArray resultsArr = new JSONArray();
             for (TaskPackResult res : results) {
                 JSONObject r = new JSONObject();
@@ -96,6 +100,12 @@ public class ConversionTaskManager {
                     t.logs.add(logsArr.getString(i));
                 }
             }
+            JSONArray advancedLogsArr = obj.optJSONArray("advanced_logs");
+            if (advancedLogsArr != null) {
+                for (int i = 0; i < advancedLogsArr.length(); i++) {
+                    t.advancedLogs.add(advancedLogsArr.getString(i));
+                }
+            }
             JSONArray resultsArr = obj.optJSONArray("results");
             if (resultsArr != null) {
                 for (int i = 0; i < resultsArr.length(); i++) {
@@ -119,6 +129,7 @@ public class ConversionTaskManager {
             this.packName = packName;
             this.status = Status.QUEUED;
             this.logs = new ArrayList<>();
+            this.advancedLogs = new ArrayList<>();
             this.results = new ArrayList<>();
         }
 
@@ -137,6 +148,7 @@ public class ConversionTaskManager {
             this.total = other.total;
             this.error = other.error;
             this.logs = new ArrayList<>(other.logs);
+            this.advancedLogs = new ArrayList<>(other.advancedLogs);
             this.results = new ArrayList<>(other.results);
         }
     }
@@ -221,11 +233,28 @@ public class ConversionTaskManager {
         // Don't save to prefs on every log to avoid I/O overhead.
     }
 
+    public synchronized void appendAdvancedLog(String taskId, String message) {
+        TaskRecord t = find(taskId);
+        if (t == null) return;
+        t.advancedLogs.add(message);
+        if (t.advancedLogs.size() > 1200) {
+            t.advancedLogs.remove(0);
+        }
+        saveToPrefs();
+    }
+
     public synchronized void updateLastLog(String taskId, String message) {
         TaskRecord t = find(taskId);
         if (t == null || t.logs.isEmpty()) return;
         t.logs.set(t.logs.size() - 1, message);
         // Don't save to prefs on every log to avoid I/O overhead.
+    }
+
+    public synchronized void updateLastAdvancedLog(String taskId, String message) {
+        TaskRecord t = find(taskId);
+        if (t == null || t.advancedLogs.isEmpty()) return;
+        t.advancedLogs.set(t.advancedLogs.size() - 1, message);
+        saveToPrefs();
     }
 
     public synchronized void markSucceeded(String taskId, List<TaskPackResult> results) {

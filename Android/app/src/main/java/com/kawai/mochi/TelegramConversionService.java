@@ -10,6 +10,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 import android.os.Build;
 import android.os.IBinder;
+import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -82,6 +83,7 @@ public class TelegramConversionService extends Service {
             manager.init(getApplicationContext());
             manager.markRunning(taskId);
             manager.appendLog(taskId, "⏳ Task queued in background...");
+            manager.appendAdvancedLog(taskId, "⏳ Task queued in background...");
             broadcastTaskUpdated(taskId);
             updateNotification(getString(R.string.telegram_conversion_notif_title), getString(R.string.telegram_conversion_notif_running), true, 0, 0);
 
@@ -94,13 +96,18 @@ public class TelegramConversionService extends Service {
                         new TelegramConverter.ConversionCallback() {
                             @Override
                             public void onLog(String message) {
-                                manager.appendLog(taskId, message);
+                                manager.appendAdvancedLog(taskId, message);
+                                if (shouldShowInNormalLog(message)) {
+                                    manager.appendLog(taskId, message);
+                                }
                                 broadcastTaskUpdated(taskId);
                             }
 
                             @Override
                             public void onLogReplace(String message) {
+                                manager.appendAdvancedLog(taskId, message);
                                 manager.updateLastLog(taskId, message);
+                                manager.updateLastAdvancedLog(taskId, message);
                                 broadcastTaskUpdated(taskId);
                             }
 
@@ -124,6 +131,7 @@ public class TelegramConversionService extends Service {
 
                 manager.markSucceeded(taskId, results);
                 manager.appendLog(taskId, "✅ Background conversion completed.");
+                manager.appendAdvancedLog(taskId, "✅ Background conversion completed.");
                 updateNotification(getString(R.string.telegram_conversion_notif_done_title),
                         getString(R.string.telegram_conversion_notif_done_text, results.size()),
                         false,
@@ -134,6 +142,8 @@ public class TelegramConversionService extends Service {
                 String err = e.getMessage() != null ? e.getMessage() : "Unknown error";
                 manager.markFailed(taskId, err);
                 manager.appendLog(taskId, "❌ Error: " + err);
+                manager.appendAdvancedLog(taskId, "❌ Error: " + err);
+                manager.appendAdvancedLog(taskId, Log.getStackTraceString(e));
                 updateNotification(getString(R.string.telegram_conversion_notif_failed_title), err, false, 0, 0);
                 broadcastTaskUpdated(taskId);
             } finally {
@@ -212,5 +222,22 @@ public class TelegramConversionService extends Service {
         intent.setPackage(getPackageName());
         intent.putExtra(EXTRA_TASK_ID, taskId);
         sendBroadcast(intent);
+    }
+
+    private boolean shouldShowInNormalLog(String message) {
+        if (message == null || message.trim().isEmpty()) return false;
+        return message.startsWith("✅")
+                || message.startsWith("⚠")
+                || message.startsWith("❌")
+                || message.startsWith("💾")
+                || message.startsWith("⏳")
+                || message.contains("Downloaded")
+                || message.contains("Converted")
+                || message.contains("Saved pack")
+                || message.contains("Task queued")
+                || message.contains("Running")
+                || message.contains("progress")
+                || message.contains("Converting")
+                || message.contains("Fetching");
     }
 }
