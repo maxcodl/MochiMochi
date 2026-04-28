@@ -52,29 +52,34 @@ public class AnimatedWebPWriter {
             frames = java.util.Arrays.asList(frames.get(0), frames.get(0));
         }
 
-        int[] qualityLadder = {72, 58, 46, 34, 24};
-        int[] fallbackLadder = {50, 38, 28, 20};
+        int[] qualityLadder = {76, 68, 60, 52, 44, 36, 28, 22, 16};
+        float[] scalePasses = {1.00f, 0.92f, 0.86f, 0.80f, 0.74f, 0.68f};
         int[] decimations   = {1, 2, 3, 4};
 
+        // Multi-level strategy:
+        // 1) keep full frame cadence and progressively lower quality
+        // 2) if still oversized, reduce spatial resolution while preserving timing
+        // 3) only then use frame decimation as a last resort
         for (int decimation : decimations) {
-            List<Bitmap> cur = decimate(frames, decimation);
-            if (cur.size() < 2) continue;
             int curDuration = Math.min(frameDurationMs * decimation, 1000);
+            List<Bitmap> decimatedFrames = decimate(frames, decimation);
+            if (decimatedFrames.size() < 2) continue;
 
-            for (int quality : qualityLadder) {
-                byte[] result = tryEncode(cur, curDuration, quality);
-                if (result != null && result.length <= MAX_SIZE_BYTES) {
-                    Log.d(TAG, "encode: success frames=" + cur.size()
-                            + " quality=" + quality + " decimation=" + decimation
-                            + " out=" + result.length);
-                    return result;
-                }
-            }
-
-            for (int quality : fallbackLadder) {
-                byte[] result = tryEncode(cur, curDuration, quality);
-                if (result != null && result.length <= MAX_SIZE_BYTES) {
-                    return result;
+            for (float scale : scalePasses) {
+                List<Bitmap> curFrames = scaleFramesIfNeeded(decimatedFrames, scale);
+                try {
+                    for (int quality : qualityLadder) {
+                        byte[] result = tryEncode(curFrames, curDuration, quality);
+                        if (result != null && result.length <= MAX_SIZE_BYTES) {
+                            Log.d(TAG, "encode: success frames=" + curFrames.size()
+                                    + " quality=" + quality + " decimation=" + decimation
+                                    + " scale=" + scale
+                                    + " out=" + result.length);
+                            return result;
+                        }
+                    }
+                } finally {
+                    recycleScaledFrames(curFrames, decimatedFrames);
                 }
             }
         }
@@ -128,8 +133,10 @@ public class AnimatedWebPWriter {
 
     private static byte[] tryEncode(List<Bitmap> frames, int durationMs, int quality) {
         try {
-            // 1. Encode every frame to static (lossy) WebP bytes
+            // 1. Encode every frame to static WebP bytes.
             byte[][] frameData = new byte[frames.size()][];
+            // Use lossy frame encoding for broad WhatsApp compatibility and predictable size
+            // reduction via the quality ladder.
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     ? Bitmap.CompressFormat.WEBP_LOSSY
                     : Bitmap.CompressFormat.WEBP;
@@ -268,10 +275,7 @@ public class AnimatedWebPWriter {
 
         while (pos + 8 <= webpBytes.length) {
             String fourcc = new String(webpBytes, pos, 4, java.nio.charset.StandardCharsets.US_ASCII);
-            int size = (webpBytes[pos + 4] & 0xFF)
-                    | ((webpBytes[pos + 5] & 0xFF) << 8)
-                    | ((webpBytes[pos + 6] & 0xFF) << 16)
-                    | ((webpBytes[pos + 7] & 0xFF) << 24);
+            int size = readLE32(webpBytes, pos + 4);
 
             if (size < 0 || pos + 8 + size > webpBytes.length) {
                 break;
@@ -280,7 +284,9 @@ public class AnimatedWebPWriter {
             int paddedSize = size + (size & 1);
             int chunkTotal = 8 + paddedSize;
 
-            if ("ALPH".equals(fourcc)) {
+            if ("VP8X".equals(fourcc)) {
+                // Extended header chunk; keep scanning for the actual frame chunk.
+            } else if ("ALPH".equals(fourcc)) {
                 pendingAlph = new byte[chunkTotal];
                 System.arraycopy(webpBytes, pos, pendingAlph, 0, chunkTotal);
             } else if ("VP8 ".equals(fourcc) || "VP8L".equals(fourcc)) {
@@ -299,6 +305,13 @@ public class AnimatedWebPWriter {
         }
 
         throw new IOException("No VP8/VP8L frame chunk found");
+    }
+
+    private static int readLE32(byte[] data, int offset) {
+        return (data[offset] & 0xFF)
+                | ((data[offset + 1] & 0xFF) << 8)
+                | ((data[offset + 2] & 0xFF) << 16)
+                | ((data[offset + 3] & 0xFF) << 24);
     }
 
     // ── Utility writers ───────────────────────────────────────────────────────
@@ -335,5 +348,39 @@ public class AnimatedWebPWriter {
         java.util.List<Bitmap> result = new java.util.ArrayList<>();
         for (int i = 0; i < frames.size(); i += step) result.add(frames.get(i));
         return result;
+    }
+
+    private static List<Bitmap> scaleFramesIfNeeded(List<Bitmap> frames, float scale) {
+        if (scale >= 0.999f) {
+            return frames;
+        }
+        java.util.List<Bitmap> scaled = new java.util.ArrayList<>(frames.size());
+        for (Bitmap f : frames) {
+            int canvasW = f.getWidth();
+            int canvasH = f.getHeight();
+            int contentW = Math.max(16, Math.round(canvasW * scale));
+            int contentH = Math.max(16, Math.round(canvasH * scale));
+
+            Bitmap out = Bitmap.createBitmap(canvasW, canvasH, Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas c = new android.graphics.Canvas(out);
+            android.graphics.Paint p = new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG);
+            android.graphics.Rect src = new android.graphics.Rect(0, 0, canvasW, canvasH);
+            int left = (canvasW - contentW) / 2;
+            int top = (canvasH - contentH) / 2;
+            android.graphics.Rect dst = new android.graphics.Rect(left, top, left + contentW, top + contentH);
+            c.drawBitmap(f, src, dst, p);
+            scaled.add(out);
+        }
+        return scaled;
+    }
+
+    private static void recycleScaledFrames(List<Bitmap> maybeScaled, List<Bitmap> original) {
+        if (maybeScaled == original) return;
+        for (Bitmap bmp : maybeScaled) {
+            if (bmp == null || bmp.isRecycled()) continue;
+            if (!original.contains(bmp)) {
+                bmp.recycle();
+            }
+        }
     }
 }
