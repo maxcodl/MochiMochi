@@ -14,6 +14,7 @@ import com.airbnb.lottie.LottieComposition;
 import com.airbnb.lottie.LottieCompositionFactory;
 import com.airbnb.lottie.LottieDrawable;
 import com.airbnb.lottie.LottieTask;
+import com.facebook.imagepipeline.animated.base.AnimatedImageFrame;
 import com.facebook.animated.webp.WebPImage;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 
@@ -597,29 +598,68 @@ public class TelegramConverter {
     }
 
     private static byte[] convertAnimatedWebPSticker(byte[] webpData) throws IOException {
-        Bitmap src = BitmapFactory.decodeByteArray(webpData, 0, webpData.length);
-        if (src == null) {
-            throw new IOException("Failed to decode animated WebP sticker");
+        WebPImage webPImage;
+        try {
+            webPImage = WebPImage.createFromByteArray(webpData, ImageDecodeOptions.defaults());
+        } catch (Exception e) {
+            throw new IOException("Failed to parse animated WebP sticker", e);
+        }
+        if (webPImage == null) {
+            throw new IOException("Failed to parse animated WebP sticker");
         }
 
-        Bitmap canvas = makeCanvas(src, STICKER_SIZE);
-        src.recycle();
-
-        Bitmap duplicate = canvas.copy(Bitmap.Config.ARGB_8888, true);
-        if (duplicate != null) {
-            int px = duplicate.getPixel(0, 0);
-            int alpha = (px >>> 24) & 0xFF;
-            int rgb = px & 0x00FFFFFF;
-            duplicate.setPixel(0, 0, ((alpha == 0 ? 1 : 0) << 24) | rgb);
+        int frameCount = Math.max(1, webPImage.getFrameCount());
+        int[] durations = webPImage.getFrameDurations();
+        int frameDurationMs = 100;
+        if (durations != null && durations.length > 0) {
+            long total = 0L;
+            int valid = 0;
+            for (int d : durations) {
+                if (d > 0) {
+                    total += d;
+                    valid++;
+                }
+            }
+            if (valid > 0) {
+                frameDurationMs = Math.max(8, (int) (total / valid));
+            }
         }
 
-        List<Bitmap> frames = new ArrayList<>();
-        frames.add(canvas);
-        if (duplicate != null) {
-            frames.add(duplicate);
+        List<Bitmap> frames = new ArrayList<>(Math.min(frameCount, MAX_FRAMES));
+        for (int i = 0; i < frameCount && frames.size() < MAX_FRAMES; i++) {
+            AnimatedImageFrame frame = null;
+            try {
+                frame = webPImage.getFrame(i);
+                Bitmap raw = Bitmap.createBitmap(
+                        webPImage.getWidth(),
+                        webPImage.getHeight(),
+                        Bitmap.Config.ARGB_8888
+                );
+                raw.eraseColor(Color.TRANSPARENT);
+                frame.renderFrame(webPImage.getWidth(), webPImage.getHeight(), raw);
+                Bitmap canvas = makeCanvas(raw, STICKER_SIZE);
+                raw.recycle();
+                frames.add(canvas);
+            } finally {
+                if (frame != null) frame.dispose();
+            }
         }
 
-        return AnimatedWebPWriter.encode(frames, 100);
+        if (frames.isEmpty()) {
+            throw new IOException("Animated WebP produced no decodable frames");
+        }
+        if (frames.size() == 1) {
+            Bitmap duplicate = frames.get(0).copy(Bitmap.Config.ARGB_8888, true);
+            if (duplicate != null) {
+                int px = duplicate.getPixel(0, 0);
+                int alpha = (px >>> 24) & 0xFF;
+                int rgb = px & 0x00FFFFFF;
+                duplicate.setPixel(0, 0, ((alpha == 0 ? 1 : 0) << 24) | rgb);
+                frames.add(duplicate);
+            }
+        }
+
+        return AnimatedWebPWriter.encode(frames, frameDurationMs);
     }
 
     private static boolean isBitmapFullyTransparent(Bitmap bmp) {

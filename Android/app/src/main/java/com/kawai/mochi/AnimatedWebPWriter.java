@@ -130,8 +130,11 @@ public class AnimatedWebPWriter {
         try {
             // 1. Encode every frame to static (lossy) WebP bytes
             byte[][] frameData = new byte[frames.size()][];
+            // Use lossless frame compression when available to preserve alpha fidelity.
+            // Lossy WebP frame encoding on some Android devices can introduce opaque black
+            // backgrounds when those frames are later repackaged into ANMF chunks.
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                    ? Bitmap.CompressFormat.WEBP_LOSSY
+                    ? Bitmap.CompressFormat.WEBP_LOSSLESS
                     : Bitmap.CompressFormat.WEBP;
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
