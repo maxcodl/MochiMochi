@@ -5,6 +5,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffXfermode;
 import android.media.MediaMetadataRetriever;
 import android.util.Log;
 import android.os.Build;
@@ -16,6 +19,7 @@ import com.airbnb.lottie.LottieDrawable;
 import com.airbnb.lottie.LottieTask;
 import com.facebook.animated.webp.WebPFrame;
 import com.facebook.animated.webp.WebPImage;
+import com.facebook.imagepipeline.animated.base.AnimatedDrawableFrameInfo;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 
 import org.json.JSONArray;
@@ -605,28 +609,56 @@ public class TelegramConverter {
             throw new IOException("Animated WebP sticker contains fewer than 2 frames");
         }
 
-        List<Bitmap> frames = new ArrayList<>(frameCount);
+        List<Bitmap> frames = new ArrayList<>(Math.min(frameCount, MAX_FRAMES));
         int[] durations = image.getFrameDurations();
         int totalDuration = 0;
+        int imageWidth = Math.max(1, image.getWidth());
+        int imageHeight = Math.max(1, image.getHeight());
 
-        for (int i = 0; i < frameCount; i++) {
+        Bitmap composed = Bitmap.createBitmap(imageWidth, imageHeight, Bitmap.Config.ARGB_8888);
+        Canvas composedCanvas = new Canvas(composed);
+        Paint clearPaint = new Paint();
+        clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+
+        int step = Math.max(1, (int) Math.ceil((double) frameCount / MAX_FRAMES));
+
+        for (int i = 0; i < frameCount; i += step) {
             WebPFrame frame = image.getFrame(i);
             try {
-                int canvasWidth = Math.max(1, image.getWidth());
-                int canvasHeight = Math.max(1, image.getHeight());
-                Bitmap rendered = Bitmap.createBitmap(canvasWidth, canvasHeight, Bitmap.Config.ARGB_8888);
-                frame.renderFrame(canvasWidth, canvasHeight, rendered);
-                frames.add(makeCanvas(rendered, STICKER_SIZE));
+                AnimatedDrawableFrameInfo info = image.getFrameInfo(i);
+
+                int frameX = Math.max(0, info.xOffset);
+                int frameY = Math.max(0, info.yOffset);
+                int frameW = Math.min(Math.max(1, info.width), imageWidth - frameX);
+                int frameH = Math.min(Math.max(1, info.height), imageHeight - frameY);
+
+                if (info.blendOperation == AnimatedDrawableFrameInfo.BlendOperation.NO_BLEND
+                        && frameW > 0 && frameH > 0) {
+                    composedCanvas.drawRect(frameX, frameY, frameX + frameW, frameY + frameH, clearPaint);
+                }
+
+                Bitmap rendered = Bitmap.createBitmap(frameW, frameH, Bitmap.Config.ARGB_8888);
+                frame.renderFrame(frameW, frameH, rendered);
+                composedCanvas.drawBitmap(rendered, frameX, frameY, null);
                 rendered.recycle();
+
+                frames.add(makeCanvas(composed, STICKER_SIZE));
+
+                if (info.disposalMethod == AnimatedDrawableFrameInfo.DisposalMethod.DISPOSE_TO_BACKGROUND
+                        && frameW > 0 && frameH > 0) {
+                    composedCanvas.drawRect(frameX, frameY, frameX + frameW, frameY + frameH, clearPaint);
+                }
 
                 int durationMs = (durations != null && i < durations.length) ? durations[i] : frame.getDurationMs();
                 if (durationMs > 0) {
-                    totalDuration += durationMs;
+                    totalDuration += durationMs * step;
                 }
             } finally {
                 frame.dispose();
             }
         }
+
+        composed.recycle();
 
         if (frames.size() < 2) {
             throw new IOException("Animated WebP sticker produced too few rendered frames");
