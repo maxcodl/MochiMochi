@@ -141,7 +141,9 @@ public class AnimatedWebPWriter {
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     ? Bitmap.CompressFormat.WEBP_LOSSLESS
                     : Bitmap.CompressFormat.WEBP;
-            int effectiveQuality = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? 100 : Math.max(quality, 100);
+            // Always 100: lossless mode ignores quality; size is controlled by
+            // scale/decimation passes in the outer loop, not per-frame quality.
+            int effectiveQuality = 100;
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
                 frames.get(i).compress(format, effectiveQuality, bos);

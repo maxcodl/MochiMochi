@@ -393,32 +393,29 @@ public class TelegramConverter {
         // 1. Decompress gzip → JSON string
         byte[] jsonBytes = decompressGzip(tgsData);
 
-        // 2. Parse composition to get fps + frame range
-        float fps;
-        int inPoint, outPoint;
-        try {
-            JSONObject meta = new JSONObject(new String(jsonBytes, "UTF-8"));
-            fps      = (float) meta.optDouble("fr", 30.0);
-            inPoint  = meta.optInt("ip", 0);
-            outPoint = meta.optInt("op", 90);
-        } catch (JSONException e) {
-            fps = 30f; inPoint = 0; outPoint = 90;
-        }
-        int renderFrames = Math.min(
-            Math.max(1, outPoint - inPoint),
-            Math.min((int) (10.0f * fps), MAX_FRAMES)
-        );
-        int frameDurationMs = Math.max(8, (int)(1000f / fps));
-
-        // 3. Parse Lottie composition synchronously (Lottie task runs on main thread — use latch)
+        // 2. Parse Lottie composition first and use its authoritative frame metadata.
         LottieComposition composition = parseLottieSync(jsonBytes);
         if (composition == null) throw new IOException("Failed to parse Lottie composition");
 
-        // 4. Render frames
-        List<Bitmap> frames = renderLottieFrames(composition, inPoint, renderFrames);
+        float fps = composition.getFrameRate();
+        int firstFrame = (int) composition.getStartFrame();
+        int lastFrame = (int) composition.getEndFrame();
+        int renderFrames = Math.min(
+            Math.max(2, lastFrame - firstFrame),
+            Math.min((int) (10.0f * fps), MAX_FRAMES)
+        );
+        int frameDurationMs = Math.max(8, (int) (1000f / Math.max(1f, fps)));
+
+        Log.d(TAG, "TGS meta: fps=" + fps
+                + " frames=" + firstFrame + ".." + lastFrame
+                + " rendering=" + renderFrames
+                + " durationMs=" + frameDurationMs);
+
+        // 3. Render frames.
+        List<Bitmap> frames = renderLottieFrames(composition, firstFrame, renderFrames);
         if (frames.size() < 2) throw new IOException("TGS produced too few frames");
 
-        // 5. Encode animated WebP with strict validation gates.
+        // 4. Encode animated WebP with strict validation gates.
         byte[] encoded = null;
         try {
             encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
@@ -456,8 +453,16 @@ public class TelegramConverter {
             String jsonString = new String(jsonBytes, "UTF-8");
             com.airbnb.lottie.LottieResult<LottieComposition> result = 
                 LottieCompositionFactory.fromJsonStringSync(jsonString, null);
-            return result.getValue();
+            LottieComposition composition = result.getValue();
+            if (composition == null) {
+                Throwable exception = result.getException();
+                Log.e(TAG, "Lottie parse returned null: "
+                        + (exception != null ? exception.getMessage() : "unknown"),
+                        exception);
+            }
+            return composition;
         } catch (Exception e) {
+            Log.e(TAG, "parseLottieSync threw: " + e.getMessage(), e);
             return null;
         }
     }
@@ -486,11 +491,24 @@ public class TelegramConverter {
             Bitmap bmp = Bitmap.createBitmap(STICKER_SIZE, STICKER_SIZE, Bitmap.Config.ARGB_8888);
             bmp.eraseColor(Color.TRANSPARENT);
             drawable.draw(new Canvas(bmp));
-            if (!isBitmapFullyTransparent(bmp)) {
-                frames.add(bmp);
-            } else {
-                bmp.recycle();
+            frames.add(bmp);
+        }
+
+        boolean allBlank = true;
+        for (Bitmap frame : frames) {
+            if (!isBitmapFullyTransparent(frame)) {
+                allBlank = false;
+                break;
             }
+        }
+        if (allBlank) {
+            Log.e(TAG, "renderLottieFrames: all " + frames.size() + " frames are transparent");
+            for (Bitmap frame : frames) {
+                frame.recycle();
+            }
+            frames.clear();
+        } else {
+            Log.d(TAG, "renderLottieFrames: rendered " + frames.size() + " frames");
         }
         return frames;
     }
