@@ -15,6 +15,7 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
@@ -26,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class EntryActivity extends BaseActivity {
     private static final ExecutorService executor = Executors.newFixedThreadPool(2);
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private View progressBar;
+    private LinearProgressIndicator progressBar;
     private View logoContainer;
     private TextView errorMessageText;
     private final AtomicBoolean taskCancelled = new AtomicBoolean(false);
@@ -150,7 +151,15 @@ public class EntryActivity extends BaseActivity {
             if (activity == null) return;
             Pair<String, ArrayList<StickerPack>> result;
             try {
-                WastickerParser.importStickerPack(activity, uri);
+                WastickerParser.importStickerPack(activity, uri, (current, total) -> {
+                    mainHandler.post(() -> {
+                        if (activity.progressBar != null) {
+                            activity.progressBar.setIndeterminate(false);
+                            activity.progressBar.setMax(total);
+                            activity.progressBar.setProgress(current, true);
+                        }
+                    });
+                });
                 
                 // Invalidate the cache after importing
                 StickerContentProvider provider = StickerContentProvider.getInstance();

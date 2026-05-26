@@ -194,7 +194,15 @@ public class WastickerParser {
         }
     }
 
+    public interface ImportProgressCallback {
+        void onProgress(int current, int total);
+    }
+
     public static String importStickerPack(Context context, Uri uri) throws IOException, JSONException {
+        return importStickerPack(context, uri, null);
+    }
+
+    public static String importStickerPack(Context context, Uri uri, ImportProgressCallback callback) throws IOException, JSONException {
         File tempDir = new File(context.getCacheDir(), "wasticker_import_" + System.currentTimeMillis());
         tempDir.mkdirs();
 
@@ -231,6 +239,13 @@ public class WastickerParser {
                 packsArray.put(botPack);
             }
 
+            int totalStickersAllPacks = 0;
+            for (int p = 0; p < packsArray.length(); p++) {
+                JSONArray stickers = packsArray.getJSONObject(p).optJSONArray("stickers");
+                if (stickers != null) totalStickersAllPacks += stickers.length();
+            }
+
+            int stickersProcessed = 0;
             String firstPackIdentifier = null;
             JSONObject masterRoot = getOrSeedMasterRoot(context);
             JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
@@ -266,6 +281,10 @@ public class WastickerParser {
                         File src = new File(tempDir, imageFile);
                         if (src.exists()) {
                             copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
+                        }
+                        stickersProcessed++;
+                        if (callback != null) {
+                            callback.onProgress(stickersProcessed, totalStickersAllPacks);
                         }
                     }
                 }
@@ -847,6 +866,12 @@ public class WastickerParser {
     // Pack Merge
     // -------------------------------------------------------------------------
 
+    public static void mergeStickerPacks(Context context,
+                                         List<StickerPack> sourcePacks,
+                                         int maxStickers) throws IOException, JSONException {
+        mergeStickerPacks(context, sourcePacks, maxStickers, null);
+    }
+
     /**
      * Creates a new sticker pack whose stickers are the union of {@code sourcePacks},
      * capped at {@code maxStickers} (WhatsApp allows at most 30).
@@ -858,10 +883,12 @@ public class WastickerParser {
      * @param context     Application context.
      * @param sourcePacks Packs to merge (must be ≥ 2).
      * @param maxStickers Hard cap on total stickers in the merged pack (≤ 30).
+     * @param callback    Optional progress callback.
      */
     public static void mergeStickerPacks(Context context,
                                          List<StickerPack> sourcePacks,
-                                         int maxStickers) throws IOException, JSONException {
+                                         int maxStickers,
+                                         ImportProgressCallback callback) throws IOException, JSONException {
         if (sourcePacks == null || sourcePacks.size() < 2) {
             throw new IllegalArgumentException("Need at least 2 packs to merge");
         }
@@ -899,6 +926,12 @@ public class WastickerParser {
         // Build the sticker JSON array while copying files.
         JSONArray stickersArray = new JSONArray();
         int stickerIndex = 1;
+
+        int totalToCopy = 0;
+        for (StickerPack p : sourcePacks) {
+            if (p.getStickers() != null) totalToCopy += p.getStickers().size();
+        }
+        totalToCopy = Math.min(totalToCopy, maxStickers);
 
         outer:
         for (StickerPack sourcePack : sourcePacks) {
@@ -945,6 +978,10 @@ public class WastickerParser {
                 }
                 stickerJson.put("emojis", emojis);
                 stickersArray.put(stickerJson);
+                
+                if (callback != null) {
+                    callback.onProgress(stickerIndex, totalToCopy);
+                }
                 stickerIndex++;
             }
         }
@@ -1007,5 +1044,26 @@ public class WastickerParser {
 
         saveMasterContents(context, masterRoot);
     }
-}
 
+    // -------------------------------------------------------------------------
+    // Pack Export
+    // -------------------------------------------------------------------------
+
+    /**
+     * Public delegate for the private {@code getOrSeedMasterRoot} — used by
+     * {@link StickerPackChunkManager} to read the master contents.json.
+     */
+    public static JSONObject getOrSeedMasterRootPublic(Context context)
+            throws IOException, JSONException {
+        return getOrSeedMasterRoot(context);
+    }
+
+    /**
+     * Public delegate for the private {@code saveMasterContents} — used by
+     * {@link StickerPackChunkManager} to persist updates to contents.json.
+     */
+    public static void saveMasterContentsPublic(Context context, JSONObject root)
+            throws IOException {
+        saveMasterContents(context, root);
+    }
+}

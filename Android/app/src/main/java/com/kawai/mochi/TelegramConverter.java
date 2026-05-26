@@ -521,73 +521,39 @@ public class TelegramConverter {
      * Mirror of Python bot's {@code convert_video_to_animated_webp()}.
      */
     static byte[] convertVideoSticker(Context context, byte[] webmData, ConversionCallback callback) throws IOException {
-        // Write to temp file — MediaMetadataRetriever needs a file path or FileDescriptor
         File tmpFile = File.createTempFile("tg_sticker_", ".webm", context.getCacheDir());
         try {
             try (FileOutputStream fos = new FileOutputStream(tmpFile)) { fos.write(webmData); }
 
-            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            retriever.setDataSource(tmpFile.getAbsolutePath());
-
-            // Get duration (ms)
-            String durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            long durationMs = 0;
-            if (durStr != null) { try { durationMs = Long.parseLong(durStr); } catch (NumberFormatException ignored) {} }
-            if (durationMs <= 0) durationMs = 3000; // fallback 3 s
-
-            // Cap: WhatsApp max 10 s, we cap at min(duration, 10000)
-            durationMs = Math.min(durationMs, 10_000);
-
-            // Match Python strategy: keep fps in [8, 20], cap by 10s and 240 frames.
-            float actualFps = Math.max(8f, Math.min(TARGET_FPS, 20f));
-            int frameCount = Math.min((int) (durationMs * actualFps / 1000f), MAX_VIDEO_FRAMES);
-            if (frameCount < 2) frameCount = 2;
-            int frameDurationMs = Math.max(8, (int)(1000f / actualFps));
-
-            // Extract frames via getFrameAtTime (every (durationMs/frameCount) µs)
-            List<Bitmap> frames = new ArrayList<>();
-            for (int i = 0; i < frameCount; i++) {
-                long timeUs = (long)((double) i / frameCount * durationMs * 1000L);
-                Bitmap frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
-                if (frame == null) continue;
-                Bitmap canvas = makeCanvas(frame, STICKER_SIZE);
-                frame.recycle();
-                frames.add(canvas);
+            // Use alpha-aware extraction first, then fall back to the basic retriever path.
+            List<Bitmap> frames = null;
+            try {
+                frames = extractFramesWithAlpha(context, tmpFile);
+                if (frames != null && frames.size() >= 2) {
+                    logVerbose(callback, "Video source: alpha-aware extraction succeeded, frames=" + frames.size());
+                }
+            } catch (Exception e) {
+                logVerbose(callback, "Video source: alpha-aware extraction failed, falling back: " + e.getMessage());
             }
-            retriever.release();
 
-            if (frames.size() < 2) {
-                if (frames.size() == 1) {
-                    Bitmap one = frames.get(0);
-                    Bitmap duplicate = one.copy(Bitmap.Config.ARGB_8888, true);
-                    // Toggle one alpha pixel so encoder keeps it as true animation.
-                    int px = duplicate.getPixel(0, 0);
-                    int a = (px >>> 24) & 0xFF;
-                    int rgb = px & 0x00FFFFFF;
-                    int toggledA = (a == 0) ? 1 : 0;
-                    duplicate.setPixel(0, 0, (toggledA << 24) | rgb);
-                    frames.add(duplicate);
-                } else {
-                    throw new IOException("No frames extracted from WebM");
+            if (frames == null || frames.size() < 2) {
+                frames = extractFramesFallback(tmpFile);
+                if (frames != null) {
+                    logVerbose(callback, "Video source: fallback extraction produced frames=" + frames.size());
                 }
             }
 
-            logVerbose(callback, "Video source: durationMs=" + durationMs
-                    + " fps=" + actualFps
-                    + " frameCount=" + frameCount
-                    + " frameDurationMs=" + frameDurationMs);
+            if (frames == null || frames.size() < 2) {
+                throw new IOException("No frames extracted from WebM");
+            }
+
+            int frameDurationMs = 50; // 20fps default
+            logVerbose(callback, "Video source: frameDurationMs=" + frameDurationMs + " frameCount=" + frames.size());
 
             byte[] encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
-            // Dump debug copy
-            try {
-                File dbg = File.createTempFile("dbg_video_", ".webp", context.getCacheDir());
-                try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
-                logVerbose(callback, "Video debug output: " + dbg.getAbsolutePath()
-                    + " bytes=" + (encoded != null ? encoded.length : 0)
+            logVerbose(callback, "Video output: bytes=" + encoded.length
                     + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
                     + " frames=" + AnimatedWebPWriter.countFrames(encoded));
-            } catch (Exception ignored) {}
-
             validateAnimatedOutput(encoded);
             return encoded;
         } finally {
@@ -595,6 +561,68 @@ public class TelegramConverter {
         }
     }
 
+        private static List<Bitmap> extractFramesWithAlpha(Context context, File videoFile) throws Exception {
+            // ExoPlayer's MediaMetadataRetriever on API 27+ supports VP9 alpha via setDataSource
+            // On supported devices this returns ARGB frames preserving transparency
+            android.media.MediaMetadataRetriever retriever = new android.media.MediaMetadataRetriever();
+            retriever.setDataSource(videoFile.getAbsolutePath());
+
+            String durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            long durationMs = durStr != null ? Long.parseLong(durStr) : 3000;
+            durationMs = Math.min(durationMs, 10_000);
+
+            int frameCount = Math.min((int)(durationMs * 20f / 1000f), MAX_VIDEO_FRAMES);
+            if (frameCount < 2) frameCount = 2;
+
+            List<Bitmap> frames = new ArrayList<>();
+            for (int i = 0; i < frameCount; i++) {
+                long timeUs = (long)((double) i / frameCount * durationMs * 1000L);
+
+                // getFrameAtTime with OPTION_CLOSEST_SYNC returns ARGB_8888 on API 27+
+                // which preserves the alpha plane from VP9 Profile 1/3 (used by Telegram)
+                Bitmap frame;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                    frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
+                } else {
+                    frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
+                }
+
+                if (frame == null) continue;
+
+                // Check if this frame actually has alpha — if any pixel is non-opaque, alpha survived
+                Bitmap canvas = makeCanvas(frame, STICKER_SIZE);
+                frame.recycle();
+                frames.add(canvas);
+            }
+            retriever.release();
+            return frames;
+        }
+
+        private static List<Bitmap> extractFramesFallback(File videoFile) {
+            try {
+                MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+                retriever.setDataSource(videoFile.getAbsolutePath());
+                String durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+                long durationMs = durStr != null ? Long.parseLong(durStr) : 3000;
+                durationMs = Math.min(durationMs, 10_000);
+                int frameCount = Math.min((int)(durationMs * 20f / 1000f), MAX_VIDEO_FRAMES);
+                if (frameCount < 2) frameCount = 2;
+                List<Bitmap> frames = new ArrayList<>();
+                for (int i = 0; i < frameCount; i++) {
+                    long timeUs = (long)((double) i / frameCount * durationMs * 1000L);
+                    Bitmap frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
+                    if (frame == null) continue;
+                    frames.add(makeCanvas(frame, STICKER_SIZE));
+                    frame.recycle();
+                }
+                retriever.release();
+                return frames;
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        
     private static void validateAnimatedOutput(byte[] encoded) throws IOException {
         if (encoded == null || encoded.length < 128) {
             throw new IOException("Converted animated output is empty or too small");

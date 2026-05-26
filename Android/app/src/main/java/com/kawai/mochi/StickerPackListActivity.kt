@@ -21,6 +21,7 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.kawai.mochi.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +41,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private var migrationJob: Job? = null
     private lateinit var itemTouchHelper: ItemTouchHelper
+    private var importProgressBar: LinearProgressIndicator? = null
 
     private val telegramImportLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -77,6 +79,15 @@ class StickerPackListActivity : AddStickerPackActivity() {
         }
     }
 
+    override fun showProgressBar() {
+        importProgressBar?.isIndeterminate = true
+        importProgressBar?.visibility = View.VISIBLE
+    }
+
+    override fun hideProgressBar() {
+        importProgressBar?.visibility = View.GONE
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_sticker_pack_list)
@@ -88,6 +99,7 @@ class StickerPackListActivity : AddStickerPackActivity() {
         packRecyclerView = findViewById(R.id.sticker_pack_list)
         emptyStateLayout = findViewById(R.id.empty_state_layout)
         importFab = findViewById(R.id.import_button_fab)
+        importProgressBar = findViewById(R.id.import_progress_bar)
 
         val intentList = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             intent.getParcelableArrayListExtra(EXTRA_STICKER_PACK_LIST_DATA, StickerPack::class.java)
@@ -263,10 +275,19 @@ class StickerPackListActivity : AddStickerPackActivity() {
     }
 
     private fun importWastickerFile(uri: Uri) {
+        importProgressBar?.isIndeterminate = false
+        importProgressBar?.progress = 0
+        importProgressBar?.visibility = View.VISIBLE
+        
         lifecycleScope.launch {
             try {
                 val imported = withContext(Dispatchers.IO) {
-                    val importedId = WastickerParser.importStickerPack(this@StickerPackListActivity, uri)
+                    val importedId = WastickerParser.importStickerPack(this@StickerPackListActivity, uri) { current, total ->
+                        runOnUiThread {
+                            importProgressBar?.max = total
+                            importProgressBar?.setProgress(current, true)
+                        }
+                    }
                     StickerContentProvider.getInstance()?.invalidateStickerPackList()
                     val importedPack = if (!importedId.isNullOrBlank()) {
                         StickerPackLoader.fetchStickerPack(this@StickerPackListActivity, importedId)
@@ -299,6 +320,8 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 packRecyclerView.smoothScrollToPosition(stickerPackList.size - 1)
             } catch (e: Exception) {
                 Toast.makeText(this@StickerPackListActivity, getString(R.string.import_error, e.message), Toast.LENGTH_LONG).show()
+            } finally {
+                importProgressBar?.visibility = View.GONE
             }
         }
     }

@@ -88,6 +88,10 @@ dependencies {
     implementation libs.fresco.animated.webp
     implementation libs.fresco.animated.base
     implementation libs.facebook.shimmer
+
+    // ExoPlayer / Media3: improved video decoding (VP9 alpha support on compatible devices)
+    implementation 'androidx.media3:media3-exoplayer:1.3.1'
+    implementation 'androidx.media3:media3-transformer:1.3.1'
     
     compileOnly libs.facebook.infer.annotation
     implementation libs.lottie

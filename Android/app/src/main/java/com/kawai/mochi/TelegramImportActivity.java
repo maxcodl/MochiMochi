@@ -131,6 +131,21 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     };
 
     @Override
+    protected void showProgressBar() {
+        if (progressBar != null) {
+            progressBar.setIndeterminate(true);
+            progressBar.setVisibility(View.VISIBLE);
+        }
+    }
+
+    @Override
+    protected void hideProgressBar() {
+        if (progressBar != null) {
+            progressBar.setVisibility(View.GONE);
+        }
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_telegram_import);

@@ -24,6 +24,13 @@
             app:titleTextColor="?attr/colorOnSurface"
             tools:title="@string/app_name" />
 
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/import_progress_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
     </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.swiperefreshlayout.widget.SwipeRefreshLayout

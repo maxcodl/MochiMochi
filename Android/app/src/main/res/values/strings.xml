@@ -82,6 +82,7 @@
     <string name="later">Later</string>
     <string name="select_wasticker_file">Select .wasticker file</string>
     <string name="import_error">Import error: %s</string>
+    <string name="importing_pack">Importing sticker pack…</string>
     <string name="pack_imported">✓ Pack imported!</string>
     <string name="error_with_message">Error: %s</string>
     <string name="pack_deleted">Pack deleted</string>
@@ -271,4 +272,10 @@
         <item quantity="one">%d sticker</item>
         <item quantity="other">%d stickers</item>
     </plurals>
+
+    <!-- Multi-chunk "Add to WhatsApp" flow (packs with >30 stickers) -->
+    <string name="chunk_add_start">This pack has more than 30 stickers. WhatsApp allows max 30 per pack, so it will be split into %d parts.\n\nTap "Add" on each WhatsApp prompt to add all parts.</string>
+    <string name="chunk_add_progress">Adding part %1$d of %2$d to WhatsApp…</string>
+    <string name="chunk_add_cancelled">Add to WhatsApp cancelled. %d part(s) were not added. Tap "Add to WhatsApp" again to retry.</string>
+    <string name="chunk_add_complete">✓ All parts added to WhatsApp!</string>
 </resources>

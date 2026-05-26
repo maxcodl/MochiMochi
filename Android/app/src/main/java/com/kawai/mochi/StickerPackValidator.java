@@ -105,8 +105,10 @@ class StickerPackValidator {
         }
 
         final List<Sticker> stickers = stickerPack.getStickers();
-        if (stickers.size() < STICKER_SIZE_MIN || stickers.size() > STICKER_SIZE_MAX) {
-            throw new IllegalStateException("sticker pack sticker count should be between 3 to 30");
+        // Lower bound only — packs with >30 stickers are allowed in local storage.
+        // The app splits them into ≤30-sticker chunks when sending to WhatsApp.
+        if (stickers.size() < STICKER_SIZE_MIN) {
+            throw new IllegalStateException("sticker pack must have at least " + STICKER_SIZE_MIN + " stickers");
         }
         
         for (final Sticker sticker : stickers) {

@@ -1328,7 +1328,7 @@ async def create_wastickers_zip(
             raise ValueError(f"Pack has only {valid_count} stickers. WhatsApp requires minimum 3 stickers per pack.")
         
         if valid_count > 30:
-            logger.warning(f"Pack has {valid_count} stickers, but WhatsApp allows maximum 30. This should have been split earlier.")
+            logger.info(f"Pack has {valid_count} stickers — the Android app will split into 30-sticker chunks when adding to WhatsApp.")
 
         # Save emoji mapping to emojis.json
         emojis_json_path = work_dir / "emojis.json"
@@ -1910,79 +1910,77 @@ async def process_stickers(
             if valid_count_total == 0:
                 raise ValueError("No valid stickers found in the pack.")
 
-            valid_chunks = split_into_chunks(valid_entries, 30)
-            num_type_parts = len(valid_chunks)
-
-            for part_num, valid_chunk in enumerate(valid_chunks, 1):
-                part_title = set_title + (f" {part_num}" if num_type_parts > 1 else "")
-                internal_name = f"{set_name_sanitized}_{type_letter}_part_{part_num}"
-                part_suffix = f" (Part {part_num}/{num_type_parts})" if num_type_parts > 1 else ""
-
-                if len(valid_chunk) < 3:
-                    logger.warning(
-                        f"Pack '{type_name}{part_suffix}' has only {len(valid_chunk)} valid sticker(s) "
-                        f"— WhatsApp requires ≥3. Skipping this pack."
-                    )
-                    continue
-
-                zip_path = _build_wasticker_zip_from_valid_entries(
-                    internal_name,
-                    optimized_tray_bytes,
-                    valid_chunk,
-                    part_title,
-                    author_name,
-                    has_animated,
+            if valid_count_total < 3:
+                logger.warning(
+                    f"Pack '{type_name}' has only {valid_count_total} valid sticker(s) "
+                    f"— WhatsApp requires ≥3. Skipping this pack."
                 )
+                continue
 
-                caption = f"{type_name} Stickers{part_suffix}: {len(valid_chunk)} stickers"
-                if stats['skipped'] > 0:
-                    caption += f"\nSkipped {stats['skipped']} invalid:"
-                    if stats['corrupt'] > 0:
-                        caption += f" {stats['corrupt']} corrupt"
-                    if stats['empty'] > 0:
-                        caption += f" {stats['empty']} empty"
-                    if stats['invalid'] > 0:
-                        caption += f" {stats['invalid']} invalid"
-                    if stats.get('skipped_reasons'):
-                        reason_counts = {}
-                        for entry in stats['skipped_reasons']:
-                            # entry format: "Sticker <n>: <reason>"
-                            reason = entry.split(': ', 1)[1] if ': ' in entry else entry
-                            reason_counts[reason] = reason_counts.get(reason, 0) + 1
-                        top_reasons = sorted(
-                            reason_counts.items(),
-                            key=lambda x: x[1],
-                            reverse=True,
-                        )[:3]
-                        if top_reasons:
-                            caption += "\nTop skip reasons:"
-                            for reason, count in top_reasons:
-                                caption += f"\n- {count}x {reason}"
-                if stats['warnings'] > 0:
-                    caption += f"\n{stats['warnings']} warning(s) logged"
-                
+            # Send one .wasticker per type — the Android app splits into ≤30-sticker
+            # chunks automatically when the user taps "Add to WhatsApp".
+            internal_name = f"{set_name_sanitized}_{type_letter}"
+
+            zip_path = _build_wasticker_zip_from_valid_entries(
+                internal_name,
+                optimized_tray_bytes,
+                valid_entries,
+                set_title,
+                author_name,
+                has_animated,
+            )
+
+            caption = f"{type_name} Stickers: {valid_count_total} stickers"
+            if stats['skipped'] > 0:
+                caption += f"\nSkipped {stats['skipped']} invalid:"
+                if stats['corrupt'] > 0:
+                    caption += f" {stats['corrupt']} corrupt"
+                if stats['empty'] > 0:
+                    caption += f" {stats['empty']} empty"
+                if stats['invalid'] > 0:
+                    caption += f" {stats['invalid']} invalid"
+                if stats.get('skipped_reasons'):
+                    reason_counts = {}
+                    for entry in stats['skipped_reasons']:
+                        # entry format: "Sticker <n>: <reason>"
+                        reason = entry.split(': ', 1)[1] if ': ' in entry else entry
+                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                    top_reasons = sorted(
+                        reason_counts.items(),
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )[:3]
+                    if top_reasons:
+                        caption += "\nTop skip reasons:"
+                        for reason, count in top_reasons:
+                            caption += f"\n- {count}x {reason}"
+            if stats['warnings'] > 0:
+                caption += f"\n{stats['warnings']} warning(s) logged"
+            if valid_count_total > 30:
+                caption += f"\n\n📱 This pack has {valid_count_total} stickers. The app will split them into batches of 30 when you add to WhatsApp."
+
+            try:
+                await msg.edit_text(f"Uploading {type_name} pack ({valid_count_total} stickers)...")
+            except Exception:
+                pass
+
+            while True:
                 try:
-                    await msg.edit_text(f"Uploading {type_name}{part_suffix}...")
-                except Exception:
-                    pass
-                
-                while True:
-                    try:
-                        await client.send_document(
-                            chat_id=target_chat,
-                            document=str(zip_path),
-                            file_name=zip_path.name,
-                            caption=caption,
-                            #reply_markup=build_open_app_keyboard(),
-                            disable_notification=True
-                        )
-                        break
-                    except FloodWait as fw:
-                        logger.warning(f"FloodWait on send_document: waiting {fw.value}s")
-                        await asyncio.sleep(fw.value)
-                
-                zip_files_info.append((zip_path, internal_name))
-                await asyncio.sleep(1)
+                    await client.send_document(
+                        chat_id=target_chat,
+                        document=str(zip_path),
+                        file_name=zip_path.name,
+                        caption=caption,
+                        #reply_markup=build_open_app_keyboard(),
+                        disable_notification=True
+                    )
+                    break
+                except FloodWait as fw:
+                    logger.warning(f"FloodWait on send_document: waiting {fw.value}s")
+                    await asyncio.sleep(fw.value)
+
+            zip_files_info.append((zip_path, internal_name))
+            await asyncio.sleep(1)
 
 
         try:
