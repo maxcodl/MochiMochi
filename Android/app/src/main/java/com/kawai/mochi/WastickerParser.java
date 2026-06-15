@@ -277,6 +277,7 @@ public class WastickerParser {
                         copyToPackFolder(context, traySource, identifier, trayImageFile, packDirDoc);
                     }
 
+                    boolean detectedAnimated = false;
                     JSONArray stickers = packJson.optJSONArray("stickers");
                     if (stickers != null) {
                         for (int s = 0; s < stickers.length(); s++) {
@@ -284,12 +285,26 @@ public class WastickerParser {
                             File src = new File(tempDir, imageFile);
                             if (src.exists()) {
                                 copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
+                                if (!detectedAnimated) {
+                                    try {
+                                        StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(src);
+                                        if (info.isAnimated) {
+                                            detectedAnimated = true;
+                                        }
+                                    } catch (Exception ignored) {}
+                                }
                             }
                             stickersProcessed++;
                             if (callback != null) {
                                 callback.onProgress(stickersProcessed, totalStickersAllPacks);
                             }
                         }
+                    }
+
+                    if (detectedAnimated) {
+                        packJson.put("animated_sticker_pack", true);
+                    } else if (!packJson.has("animated_sticker_pack")) {
+                        packJson.put("animated_sticker_pack", false);
                     }
                     
                     // Ensure version exists before merging
@@ -569,19 +584,16 @@ public class WastickerParser {
         }
     }
 
+    /**
+     * Fast animation check: reads only the WebP header via WebPMetadataReader.
+     */
     public static boolean isAnimatedWebPPublic(Context context, String identifier, String fileName) {
         try {
-            byte[] bytes = StickerPackLoader.fetchStickerAsset(identifier, fileName, context.getContentResolver());
-            if (bytes == null || bytes.length == 0) {
-                android.util.Log.w(TAG, "isAnimatedWebPPublic: empty bytes for " + identifier + "/" + fileName);
-                return false;
-            }
-            WebPImage webPImage = WebPImage.createFromByteArray(bytes, ImageDecodeOptions.defaults());
-            int frameCount = webPImage.getFrameCount();
-            android.util.Log.d(TAG, "isAnimatedWebPPublic: " + identifier + "/" + fileName + " frameCount=" + frameCount);
-            return frameCount > 1;
+            Uri uri = StickerPackLoader.getStickerAssetUri(identifier, fileName);
+            WebPMetadataReader.WebPInfo info = WebPMetadataReader.read(context, uri);
+            return info.isAnimated;
         } catch (Exception e) {
-            android.util.Log.e(TAG, "isAnimatedWebPPublic: error for " + identifier + "/" + fileName, e);
+            android.util.Log.e(TAG, "isAnimatedWebPPublic error: " + identifier + "/" + fileName, e);
             return false;
         }
     }
@@ -1069,5 +1081,81 @@ public class WastickerParser {
     public static void saveMasterContentsPublic(Context context, JSONObject root)
             throws IOException {
         saveMasterContents(context, root);
+    }
+
+    /**
+     * Background migration: scans all imported sticker packs in the master contents.json,
+     * inspects their WebP files, and if any contains animated frames but the pack's
+     * animated_sticker_pack flag is false (or missing), auto-corrects it to true and saves contents.json.
+     */
+    public static void fixAnimatedPackFlagsIfNeeded(Context context) {
+        try {
+            JSONObject masterRoot = getOrSeedMasterRoot(context);
+            JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+            if (masterPacks == null) return;
+
+            boolean modified = false;
+            String rootPath = getStickerFolderPath(context);
+            boolean isSAF = isCustomPathUri(context);
+            DocumentFile safRoot = isSAF ? DocumentFile.fromTreeUri(context, Uri.parse(rootPath)) : null;
+
+            for (int i = 0; i < masterPacks.length(); i++) {
+                JSONObject packJson = masterPacks.getJSONObject(i);
+                boolean isAnimatedFlag = packJson.optBoolean("animated_sticker_pack", false);
+                if (isAnimatedFlag) continue; // Already marked as animated
+
+                String identifier = packJson.optString("identifier");
+                if (identifier == null || identifier.trim().isEmpty()) continue;
+
+                JSONArray stickers = packJson.optJSONArray("stickers");
+                if (stickers == null) continue;
+
+                boolean hasAnimatedSticker = false;
+                DocumentFile packDirDoc = (safRoot != null) ? safRoot.findFile(identifier) : null;
+                File packDirFile = isSAF ? null : new File(new File(rootPath), identifier);
+
+                for (int s = 0; s < stickers.length(); s++) {
+                    String imageFile = stickers.getJSONObject(s).optString("image_file");
+                    if (imageFile == null || imageFile.trim().isEmpty()) continue;
+
+                    StickerInfoAdapter.WebPInfo info = null;
+                    if (isSAF) {
+                        if (packDirDoc != null) {
+                            DocumentFile fileDoc = packDirDoc.findFile(imageFile);
+                            if (fileDoc != null && fileDoc.exists()) {
+                                info = StickerInfoAdapter.readWebPInfo(context, fileDoc.getUri());
+                            }
+                        }
+                    } else {
+                        File file = new File(packDirFile, imageFile);
+                        if (file.exists()) {
+                            info = StickerInfoAdapter.readWebPInfo(file);
+                        }
+                    }
+
+                    if (info != null && info.isAnimated) {
+                        hasAnimatedSticker = true;
+                        break;
+                    }
+                }
+
+                if (hasAnimatedSticker) {
+                    packJson.put("animated_sticker_pack", true);
+                    modified = true;
+                    Log.i("WastickerParser", "Auto-fixed animated_sticker_pack flag to true for pack: " + identifier);
+                }
+            }
+
+            if (modified) {
+                saveMasterContents(context, masterRoot);
+                StickerContentProvider provider = StickerContentProvider.getInstance();
+                if (provider != null) {
+                    provider.invalidateStickerPackList();
+                }
+                context.getContentResolver().notifyChange(StickerContentProvider.AUTHORITY_URI, null);
+            }
+        } catch (Exception e) {
+            Log.e("WastickerParser", "Failed to auto-fix animated pack flags", e);
+        }
     }
 }

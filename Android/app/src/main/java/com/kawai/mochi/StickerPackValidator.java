@@ -32,8 +32,8 @@ class StickerPackValidator {
     static final int MAX_STATIC_STICKER_A11Y_TEXT_CHAR_LIMIT = 125;
     static final int MAX_ANIMATED_STICKER_A11Y_TEXT_CHAR_LIMIT = 255;
 
-    private static final int STATIC_STICKER_FILE_LIMIT_KB = 500;
-    private static final int ANIMATED_STICKER_FILE_LIMIT_KB = 500;
+    private static final int STATIC_STICKER_FILE_LIMIT_KB = 100;
+    private static final int ANIMATED_STICKER_FILE_LIMIT_KB = 488; // 488 * 1024 = 499,712 bytes (under 500,000 decimal bytes limit)
     private static final int EMOJI_MIN_LIMIT = 1;
     private static final int IMAGE_HEIGHT = 512;
     private static final int IMAGE_WIDTH = 512;
@@ -139,10 +139,10 @@ class StickerPackValidator {
         }
 
         if (!animatedStickerPack && fileSize > STATIC_STICKER_FILE_LIMIT_KB * KB_IN_BYTES) {
-            throw new IllegalStateException("static sticker > 100KB: " + sticker.imageFileName);
+            throw new IllegalStateException("static sticker exceeds 100 KB: " + sticker.imageFileName);
         }
         if (animatedStickerPack && fileSize > ANIMATED_STICKER_FILE_LIMIT_KB * KB_IN_BYTES) {
-            throw new IllegalStateException("animated sticker > 500KB: " + sticker.imageFileName);
+            throw new IllegalStateException("animated sticker exceeds 500,000 bytes (limit: 488 KB): " + sticker.imageFileName);
         }
 
         if (!quickCheck) {

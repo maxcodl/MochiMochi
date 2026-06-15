@@ -24,15 +24,18 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     protected boolean mCreatedWithAmoled;
     protected int mCreatedWithThemeMode;
+    protected boolean mCreatedWithPerfMode;
 
     @Override
     protected void onCreate(android.os.Bundle savedInstanceState) {
         android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
         int themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        boolean perfMode = prefs.getBoolean("enable_animations", false);
 
         mCreatedWithAmoled = isAmoled;
         mCreatedWithThemeMode = themeMode;
+        mCreatedWithPerfMode = perfMode;
 
         if (isAmoled) {
             setTheme(R.style.AppTheme_Amoled);
@@ -44,8 +47,6 @@ public abstract class BaseActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
 
         // Enable edge-to-edge drawing globally. 
-        // Specific layouts must handle padding via android:fitsSystemWindows="true" 
-        // or WindowInsets listeners.
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
     }
 
@@ -55,11 +56,13 @@ public abstract class BaseActivity extends AppCompatActivity {
         android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         boolean isAmoled = prefs.getBoolean("theme_amoled", false);
         int themeMode = prefs.getInt("theme_mode", AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        boolean perfMode = prefs.getBoolean("enable_animations", false);
         
         // Only recreate if we're not mid-recreation and values actually differ
-        if (isAmoled != mCreatedWithAmoled || themeMode != mCreatedWithThemeMode) {
+        if (isAmoled != mCreatedWithAmoled || themeMode != mCreatedWithThemeMode || perfMode != mCreatedWithPerfMode) {
             mCreatedWithAmoled = isAmoled;
             mCreatedWithThemeMode = themeMode;
+            mCreatedWithPerfMode = perfMode;
             recreate();
         }
     }

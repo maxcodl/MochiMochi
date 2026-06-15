@@ -47,12 +47,14 @@ abstract class AddStickerPackActivity : BaseActivity() {
                 val validationError = result.data?.getStringExtra("validation_error")
                 if (validationError != null) {
                     Log.e(TAG, "WhatsApp validation failed: $validationError")
-                    MessageDialogFragment.newInstance(
-                        R.string.title_validation_error,
-                        getString(R.string.whatsapp_reported_error, validationError)
-                    ).show(supportFragmentManager, "whatsapp validation error")
-                    // Abort chunk sequence on validation failure.
-                    abortChunkSession()
+                    Toast.makeText(
+                        this,
+                        getString(R.string.whatsapp_reported_error, validationError),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    // Try adding the next chunk instead of aborting
+                    window.decorView.post { restoreStatusBarAppearance() }
+                    launchNextChunkOrFinish()
                     return@registerForActivityResult
                 }
                 // User dismissed the WhatsApp dialog — warn and abort.

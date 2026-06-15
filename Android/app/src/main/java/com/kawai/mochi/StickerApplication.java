@@ -50,11 +50,13 @@ public class StickerApplication extends Application {
 
         new Thread(() -> {
             try {
-                WastickerParser.seedBundledPacksIfNeeded(getApplicationContext());
+                android.content.Context appCtx = getApplicationContext();
+                WastickerParser.seedBundledPacksIfNeeded(appCtx);
+                WastickerParser.fixAnimatedPackFlagsIfNeeded(appCtx);
             } catch (Exception e) {
-                android.util.Log.e("StickerApplication", "Bundled pack seeding failed", e);
+                android.util.Log.e("StickerApplication", "Initialization failed", e);
             }
-        }, "SeedBundledPacks").start();
+        }, "AppInit").start();
 
         android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
         int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);

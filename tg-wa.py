@@ -98,8 +98,8 @@ def sanitize_filename(name: str) -> str:
 
 
 # WhatsApp sticker hard limits
-WA_MAX_BYTES   = 500 * 1024  # 500 KB per sticker (hard limit)
-WA_ANIM_TARGET = 500 * 1024  # encode target (use full limit with fast encoding)
+WA_MAX_BYTES   = 488 * 1024  # under 500,000 decimal bytes (WhatsApp hard limit)
+WA_ANIM_TARGET = 460 * 1024  # tighter encode target to avoid >500,000 byte outputs
 
 # Shared HTTP session (reduces TCP/TLS setup overhead per sticker request).
 _HTTP_SESSION: aiohttp.ClientSession | None = None
@@ -453,18 +453,33 @@ def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
     r, g, b, a = px[0, 0]
     px[0, 0] = (r, g, b, 1 if a == 0 else 0)
 
-    canvas.save(
-        output, format="WEBP", save_all=True,
-        append_images=[frame2],
-        duration=[100, 100], loop=0, quality=85, method=6,
-        background=(0, 0, 0, 0), lossless=False
-    )
-    output.seek(0)
+    attempts = [
+        (85, 0, 90),
+        (75, 0, 85),
+        (65, 4, 80),
+        (55, 4, 75),
+        (45, 6, 70),
+        (35, 6, 65),
+    ]
 
-    if not _is_animated_webp_bytes(output.getvalue()):
-        raise Exception("Failed to force animated WebP output")
+    for quality, method, alpha_quality in attempts:
+        output.seek(0)
+        output.truncate(0)
+        canvas.save(
+            output, format="WEBP", save_all=True,
+            append_images=[frame2],
+            duration=[100, 100], loop=0,
+            quality=quality, method=method,
+            alpha_quality=alpha_quality,
+            background=(0, 0, 0, 0), lossless=False
+        )
+        if output.tell() <= WA_MAX_BYTES:
+            output.seek(0)
+            if not _is_animated_webp_bytes(output.getvalue()):
+                raise Exception("Failed to force animated WebP output")
+            return output
 
-    return output
+    raise Exception("Could not encode one-frame animation under 500KB")
 
 
 
@@ -487,7 +502,7 @@ def _encode_animated_webp_under_limit(
     if len(pil_frames) < 2:
         raise Exception(f"Cannot create animated WebP with only {len(pil_frames)} frame(s). Need at least 2.")
     
-    def _try(frames, dur_ms, q, method):
+    def _try(frames, dur_ms, q, method, alpha_q=90):
         buf = BytesIO()
         frames[0].save(
             buf, format="WEBP", save_all=True,
@@ -496,14 +511,14 @@ def _encode_animated_webp_under_limit(
             quality=q, method=method,
             kmax=1,                    # every frame is a keyframe → no transparent bleed
             allow_mixed=True,          # lossless alpha + lossy colour per frame
-            alpha_quality=90,          # high-quality alpha plane
+            alpha_quality=alpha_q,      # high-quality alpha plane
             background=(0, 0, 0, 0),
         )
         return buf
 
-    def _quality_search(frames, dur_ms, qualities, method):
+    def _quality_search(frames, dur_ms, qualities, method, alpha_q=90):
         for q in qualities:
-            buf = _try(frames, dur_ms, q, method)
+            buf = _try(frames, dur_ms, q, method, alpha_q)
             sz = buf.tell()
             if sz <= max_size:
                 buf.seek(0)
@@ -553,6 +568,16 @@ def _encode_animated_webp_under_limit(
                 method=4,
             )
 
+        # Pass 3: aggressive alpha/quality fallback for stubborn stickers.
+        if best_buf is None and decimation >= 2:
+            best_buf, best_q, best_size, used_method = _quality_search(
+                cur_frames,
+                cur_dur,
+                qualities=[26, 20, 16, 12],
+                method=6,
+                alpha_q=70,
+            )
+
         if best_buf is not None:
             logger.info(
                 f"✓ Animated WebP: {len(cur_frames)} frames "
@@ -569,7 +594,7 @@ def _encode_animated_webp_under_limit(
     # No decimation level produced acceptable result - fail
     raise Exception(
         f"Could not encode animated WebP under {max_size // 1024}KB limit even with "
-        f"maximum decimation (4x) and minimum fallback quality (20). "
+        f"maximum decimation (4x) and minimum fallback quality (12). "
         f"Sticker is too complex to convert."
     )
 
@@ -1388,6 +1413,18 @@ def _build_wasticker_zip_from_valid_entries(
     packs_dir = BASE_DIR / "wasticker_packs"
     packs_dir.mkdir(exist_ok=True)
 
+    filtered_entries = []
+    for entry in valid_entries:
+        if len(entry['bytes']) > WA_MAX_BYTES:
+            logger.warning(
+                f"Skipping oversized sticker in final pack build: {len(entry['bytes']) // 1024}KB"
+            )
+            continue
+        filtered_entries.append(entry)
+
+    if len(filtered_entries) < 3:
+        raise ValueError("Pack has fewer than 3 valid stickers after size enforcement.")
+
     import uuid
     unique_id = uuid.uuid4().hex[:8]
     work_dir = packs_dir / f"pack_{set_name}_{unique_id}"
@@ -1402,7 +1439,7 @@ def _build_wasticker_zip_from_valid_entries(
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
 
         emoji_map = {}
-        for entry in valid_entries:
+        for entry in filtered_entries:
             sticker_filename = f"{set_name}_{entry['file_id'][-12:]}.webp"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:

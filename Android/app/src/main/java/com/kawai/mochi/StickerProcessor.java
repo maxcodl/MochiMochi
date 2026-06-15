@@ -217,6 +217,29 @@ public class StickerProcessor {
         return false;
     }
 
+    public static boolean stripWebPMetadata(Context context, Uri uri) {
+        try {
+            byte[] data;
+            try (InputStream is = context.getContentResolver().openInputStream(uri)) {
+                if (is == null) return false;
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = is.read(buf)) > 0) bos.write(buf, 0, len);
+                data = bos.toByteArray();
+            }
+            byte[] stripped = stripWebPMetadataBytes(data);
+            if (stripped != null) {
+                try (OutputStream os = context.getContentResolver().openOutputStream(uri, "wt")) {
+                    if (os == null) return false;
+                    os.write(stripped);
+                }
+                return true;
+            }
+        } catch (Exception e) { Log.e(TAG, "SAF strip failed", e); }
+        return false;
+    }
+
     private static boolean stripWebPMetadata(byte[] data, File file) throws IOException {
         byte[] stripped = stripWebPMetadataBytes(data);
         if (stripped != null) {

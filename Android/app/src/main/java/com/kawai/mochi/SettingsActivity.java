@@ -199,44 +199,110 @@ public class SettingsActivity extends BaseActivity {
         StringBuilder report = new StringBuilder();
         report.append(getString(R.string.deep_pack_diagnostics_report_title));
         String root = WastickerParser.getStickerFolderPath(this);
+        boolean isSAF = WastickerParser.isCustomPathUri(this);
+
+        // Pre-fetch SAF root and pack directories once
+        androidx.documentfile.provider.DocumentFile safRoot = null;
+        java.util.Map<String, androidx.documentfile.provider.DocumentFile> safPackDirs = new java.util.HashMap<>();
+        if (isSAF) {
+            safRoot = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, Uri.parse(root));
+            if (safRoot != null) {
+                for (androidx.documentfile.provider.DocumentFile child : safRoot.listFiles()) {
+                    if (child.isDirectory() && child.getName() != null) {
+                        safPackDirs.put(child.getName(), child);
+                    }
+                }
+            }
+        }
 
         for (StickerPack pack : packs) {
             report.append("■ PACK: ").append(pack.name).append("\n");
-            File packDir = new File(new File(root), pack.identifier);
-            File trayFile = new File(packDir, pack.trayImageFile);
-            
-            String trayInfo = getString(R.string.diagnostics_missing_tray);
-            if (trayFile.exists()) {
-                android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
-                opts.inJustDecodeBounds = true;
-                android.graphics.BitmapFactory.decodeFile(trayFile.getAbsolutePath(), opts);
-                trayInfo = "(" + opts.outWidth + "x" + opts.outHeight + ", " + Formatter.formatShortFileSize(this, trayFile.length()) + ")";
-            }
-            report.append(getString(R.string.diagnostics_tray_label)).append(pack.trayImageFile).append(" ").append(trayInfo).append("\n");
 
-            if (pack.getStickers() != null) {
-                for (Sticker s : pack.getStickers()) {
-                    File file = new File(packDir, s.imageFileName);
-                    if (file.exists()) {
-                        StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(file);
-                        report.append("    ○ ").append(s.imageFileName).append("\n");
-                        report.append("      ").append(info.width).append("x").append(info.height)
-                              .append("  ").append(Formatter.formatShortFileSize(this, file.length()))
-                              .append(info.isAnimated ? "  [" + getString(R.string.animated) + "]" : "  [" + getString(R.string.static_pack) + "]").append("\n");
-                        
-                        // Color/Alpha info
-                        report.append("      Color: ").append(info.hasAlpha ? "RGBA" : "RGB");
-                        if (info.hasIcc) report.append(" + ICC");
-                        if (info.hasExif) report.append(" + EXIF");
-                        report.append("\n");
-                        
-                        // Frames/FPS info
-                        if (info.isAnimated) {
-                            report.append("      Frames: ").append(info.frameCount);
-                            if (info.fps > 0) report.append("  Rate: ").append(info.fps).append(" fps");
-                            report.append("\n");
+            String trayInfo = getString(R.string.diagnostics_missing_tray);
+
+            if (isSAF) {
+                // SAF path — use DocumentFile
+                androidx.documentfile.provider.DocumentFile packDir = safPackDirs.get(pack.identifier);
+                if (packDir != null) {
+                    androidx.documentfile.provider.DocumentFile trayDoc = packDir.findFile(pack.trayImageFile);
+                    if (trayDoc != null && trayDoc.exists()) {
+                        android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                        opts.inJustDecodeBounds = true;
+                        try (java.io.InputStream is = getContentResolver().openInputStream(trayDoc.getUri())) {
+                            android.graphics.BitmapFactory.decodeStream(is, null, opts);
+                        } catch (Exception ignored) {}
+                        trayInfo = "(" + opts.outWidth + "x" + opts.outHeight + ", " + Formatter.formatShortFileSize(this, trayDoc.length()) + ")";
+                    }
+                }
+                report.append(getString(R.string.diagnostics_tray_label)).append(pack.trayImageFile).append(" ").append(trayInfo).append("\n");
+
+                if (pack.getStickers() != null) {
+                    // Build a name→DocumentFile lookup for this pack to avoid O(n²) findFile calls
+                    java.util.Map<String, androidx.documentfile.provider.DocumentFile> fileMap = new java.util.HashMap<>();
+                    if (packDir != null) {
+                        for (androidx.documentfile.provider.DocumentFile f : packDir.listFiles()) {
+                            if (!f.isDirectory() && f.getName() != null) fileMap.put(f.getName(), f);
                         }
-                    } else report.append(getString(R.string.diagnostics_missing_sticker, s.imageFileName));
+                    }
+
+                    for (Sticker s : pack.getStickers()) {
+                        androidx.documentfile.provider.DocumentFile stickerDoc = fileMap.get(s.imageFileName);
+                        if (stickerDoc != null && stickerDoc.exists()) {
+                            Uri contentUri = stickerDoc.getUri();
+                            StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(this, contentUri);
+                            report.append("    ○ ").append(s.imageFileName).append("\n");
+                            report.append("      ").append(info.width).append("x").append(info.height)
+                                  .append("  ").append(Formatter.formatShortFileSize(this, stickerDoc.length()))
+                                  .append(info.isAnimated ? "  [" + getString(R.string.animated) + "]" : "  [" + getString(R.string.static_pack) + "]").append("\n");
+
+                            report.append("      Color: ").append(info.hasAlpha ? "RGBA" : "RGB");
+                            if (info.hasIcc) report.append(" + ICC");
+                            if (info.hasExif) report.append(" + EXIF");
+                            report.append("\n");
+
+                            if (info.isAnimated) {
+                                report.append("      Frames: ").append(info.frameCount);
+                                if (info.fps > 0) report.append("  Rate: ").append(info.fps).append(" fps");
+                                report.append("\n");
+                            }
+                        } else report.append(getString(R.string.diagnostics_missing_sticker, s.imageFileName));
+                    }
+                }
+            } else {
+                // Internal file path — use java.io.File
+                File packDir = new File(new File(root), pack.identifier);
+                File trayFile = new File(packDir, pack.trayImageFile);
+
+                if (trayFile.exists()) {
+                    android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                    opts.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeFile(trayFile.getAbsolutePath(), opts);
+                    trayInfo = "(" + opts.outWidth + "x" + opts.outHeight + ", " + Formatter.formatShortFileSize(this, trayFile.length()) + ")";
+                }
+                report.append(getString(R.string.diagnostics_tray_label)).append(pack.trayImageFile).append(" ").append(trayInfo).append("\n");
+
+                if (pack.getStickers() != null) {
+                    for (Sticker s : pack.getStickers()) {
+                        File file = new File(packDir, s.imageFileName);
+                        if (file.exists()) {
+                            StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(file);
+                            report.append("    ○ ").append(s.imageFileName).append("\n");
+                            report.append("      ").append(info.width).append("x").append(info.height)
+                                  .append("  ").append(Formatter.formatShortFileSize(this, file.length()))
+                                  .append(info.isAnimated ? "  [" + getString(R.string.animated) + "]" : "  [" + getString(R.string.static_pack) + "]").append("\n");
+
+                            report.append("      Color: ").append(info.hasAlpha ? "RGBA" : "RGB");
+                            if (info.hasIcc) report.append(" + ICC");
+                            if (info.hasExif) report.append(" + EXIF");
+                            report.append("\n");
+
+                            if (info.isAnimated) {
+                                report.append("      Frames: ").append(info.frameCount);
+                                if (info.fps > 0) report.append("  Rate: ").append(info.fps).append(" fps");
+                                report.append("\n");
+                            }
+                        } else report.append(getString(R.string.diagnostics_missing_sticker, s.imageFileName));
+                    }
                 }
             }
             report.append("\n");
@@ -286,70 +352,179 @@ public class SettingsActivity extends BaseActivity {
         repairExecutor.execute(() -> {
             int fixedCount = 0;
             String rootPath = WastickerParser.getStickerFolderPath(this);
+            boolean isSAF = WastickerParser.isCustomPathUri(this);
+
+            // Pre-fetch SAF root for all packs
+            androidx.documentfile.provider.DocumentFile safRoot = null;
+            java.util.Map<String, androidx.documentfile.provider.DocumentFile> safPackDirs = new java.util.HashMap<>();
+            if (isSAF) {
+                safRoot = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, Uri.parse(rootPath));
+                if (safRoot != null) {
+                    for (androidx.documentfile.provider.DocumentFile child : safRoot.listFiles()) {
+                        if (child.isDirectory() && child.getName() != null) {
+                            safPackDirs.put(child.getName(), child);
+                        }
+                    }
+                }
+            }
 
             for (StickerPack pack : packs) {
                 postLog(logText, sv, "\n■ PROCESSING: " + pack.name);
-                File packDir = new File(new File(rootPath), pack.identifier);
 
-                // 1. Repair Tray
-                File trayFile = new File(packDir, pack.trayImageFile);
-                boolean trayBad = !trayFile.exists() || trayFile.length() == 0;
-                if (!trayBad) {
-                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
-                    o.inJustDecodeBounds = true;
-                    android.graphics.BitmapFactory.decodeFile(trayFile.getAbsolutePath(), o);
-                    if (o.outWidth != 96 || o.outHeight != 96) trayBad = true;
-                }
+                if (isSAF) {
+                    // ── SAF repair path ──
+                    androidx.documentfile.provider.DocumentFile packDir = safPackDirs.get(pack.identifier);
 
-                if (trayBad && pack.getStickers() != null && !pack.getStickers().isEmpty()) {
-                    try {
-                        postLog(logText, sv, "  ⚙ Standardizing Tray Icon (96x96)...");
-                        File src = new File(packDir, pack.getStickers().get(0).imageFileName);
-                        StickerProcessor.processTrayIcon(src, trayFile);
-                        postLog(logText, sv, "    ✓ Fixed Tray.");
-                        fixedCount++;
-                    } catch (Exception e) { postLog(logText, sv, "    ✖ Tray failed: " + e.getMessage()); }
-                }
+                    // Build file lookup map
+                    java.util.Map<String, androidx.documentfile.provider.DocumentFile> fileMap = new java.util.HashMap<>();
+                    if (packDir != null) {
+                        for (androidx.documentfile.provider.DocumentFile f : packDir.listFiles()) {
+                            if (!f.isDirectory() && f.getName() != null) fileMap.put(f.getName(), f);
+                        }
+                    }
 
-                // 2. Repair Stickers
-                if (pack.getStickers() != null) {
-                    for (Sticker s : pack.getStickers()) {
-                        File f = new File(packDir, s.imageFileName);
-                        if (!f.exists()) continue;
+                    // 1. Repair Tray
+                    androidx.documentfile.provider.DocumentFile trayDoc = fileMap.get(pack.trayImageFile);
+                    boolean trayBad = trayDoc == null || !trayDoc.exists() || trayDoc.length() == 0;
+                    if (!trayBad) {
+                        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                        o.inJustDecodeBounds = true;
+                        try (java.io.InputStream is = getContentResolver().openInputStream(trayDoc.getUri())) {
+                            android.graphics.BitmapFactory.decodeStream(is, null, o);
+                        } catch (Exception ignored) {}
+                        if (o.outWidth != 96 || o.outHeight != 96) trayBad = true;
+                    }
 
-                        StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(f);
-                        boolean needsFix = false;
-                        
-                        if (!info.isAnimated) {
-                            if (info.width != 512 || info.height != 512 || f.length() > 100 * 1024) {
-                                needsFix = true;
-                            }
-                        } else {
-                            if (info.width != 512 || info.height != 512) {
-                                postLog(logText, sv, "  ⚠ Animated sticker wrong size (" + info.width + "x" + info.height + "). Resizing animated WebP is limited.");
-                            }
-                            
-                            postLog(logText, sv, "  ⚙ Cleaning Metadata: " + s.imageFileName);
-                            if (StickerProcessor.stripWebPMetadata(f)) {
-                                postLog(logText, sv, "    ✓ Metadata stripped.");
-                                fixedCount++;
+                    if (trayBad && pack.getStickers() != null && !pack.getStickers().isEmpty()) {
+                        try {
+                            postLog(logText, sv, "  ⚙ Standardizing Tray Icon (96x96)...");
+                            androidx.documentfile.provider.DocumentFile srcDoc = fileMap.get(pack.getStickers().get(0).imageFileName);
+                            if (srcDoc == null || !srcDoc.exists()) {
+                                postLog(logText, sv, "    ✖ Tray failed: source sticker not found");
                             } else {
-                                postLog(logText, sv, "    · No metadata found.");
+                                // Ensure tray destination exists
+                                if (trayDoc == null && packDir != null) {
+                                    trayDoc = packDir.createFile("image/png", pack.trayImageFile);
+                                }
+                                if (trayDoc != null) {
+                                    StickerProcessor.processTrayIcon(this, srcDoc.getUri(), trayDoc.getUri());
+                                    postLog(logText, sv, "    ✓ Fixed Tray.");
+                                    fixedCount++;
+                                } else {
+                                    postLog(logText, sv, "    ✖ Tray failed: could not create tray file");
+                                }
                             }
-                            
-                            if (f.length() > 500 * 1024) {
-                                postLog(logText, sv, "  ✖ CRITICAL: Animated sticker still over 500KB (" + Formatter.formatShortFileSize(this, f.length()) + ")");
+                        } catch (Exception e) { postLog(logText, sv, "    ✖ Tray failed: " + e.getMessage()); }
+                    }
+
+                    // 2. Repair Stickers
+                    if (pack.getStickers() != null) {
+                        for (Sticker s : pack.getStickers()) {
+                            androidx.documentfile.provider.DocumentFile stickerDoc = fileMap.get(s.imageFileName);
+                            if (stickerDoc == null || !stickerDoc.exists()) continue;
+
+                            Uri stickerUri = stickerDoc.getUri();
+                            StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(this, stickerUri);
+                            boolean needsFix = false;
+
+                            if (!info.isAnimated) {
+                                if (info.width != 512 || info.height != 512 || stickerDoc.length() > 100 * 1024) {
+                                    needsFix = true;
+                                }
+                            } else {
+                                if (info.width != 512 || info.height != 512) {
+                                    postLog(logText, sv, "  ⚠ Animated sticker wrong size (" + info.width + "x" + info.height + "). Resizing animated WebP is limited.");
+                                }
+
+                                postLog(logText, sv, "  ⚙ Cleaning Metadata: " + s.imageFileName);
+                                if (StickerProcessor.stripWebPMetadata(this, stickerUri)) {
+                                    postLog(logText, sv, "    ✓ Metadata stripped.");
+                                    fixedCount++;
+                                } else {
+                                    postLog(logText, sv, "    · No metadata found.");
+                                }
+
+                                if (stickerDoc.length() > 500 * 1024) {
+                                    postLog(logText, sv, "  ✖ CRITICAL: Animated sticker still over 500KB (" + Formatter.formatShortFileSize(this, stickerDoc.length()) + ")");
+                                }
+                            }
+
+                            if (needsFix && !info.isAnimated) {
+                                try {
+                                    postLog(logText, sv, "  ⚙ Standardizing Static: " + s.imageFileName);
+                                    StickerProcessor.processStaticSticker(this, stickerUri, stickerUri);
+                                    postLog(logText, sv, "    ✓ Fixed (512x512).");
+                                    fixedCount++;
+                                } catch (Exception e) {
+                                    postLog(logText, sv, "    ✖ Failed: " + e.getMessage());
+                                }
                             }
                         }
+                    }
+                } else {
+                    // ── Internal file path repair ──
+                    File packDir = new File(new File(rootPath), pack.identifier);
 
-                        if (needsFix && !info.isAnimated) {
-                            try {
-                                postLog(logText, sv, "  ⚙ Standardizing Static: " + s.imageFileName);
-                                StickerProcessor.processStaticSticker(f, f);
-                                postLog(logText, sv, "    ✓ Fixed (512x512).");
-                                fixedCount++;
-                            } catch (Exception e) {
-                                postLog(logText, sv, "    ✖ Failed: " + e.getMessage());
+                    // 1. Repair Tray
+                    File trayFile = new File(packDir, pack.trayImageFile);
+                    boolean trayBad = !trayFile.exists() || trayFile.length() == 0;
+                    if (!trayBad) {
+                        android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                        o.inJustDecodeBounds = true;
+                        android.graphics.BitmapFactory.decodeFile(trayFile.getAbsolutePath(), o);
+                        if (o.outWidth != 96 || o.outHeight != 96) trayBad = true;
+                    }
+
+                    if (trayBad && pack.getStickers() != null && !pack.getStickers().isEmpty()) {
+                        try {
+                            postLog(logText, sv, "  ⚙ Standardizing Tray Icon (96x96)...");
+                            File src = new File(packDir, pack.getStickers().get(0).imageFileName);
+                            StickerProcessor.processTrayIcon(src, trayFile);
+                            postLog(logText, sv, "    ✓ Fixed Tray.");
+                            fixedCount++;
+                        } catch (Exception e) { postLog(logText, sv, "    ✖ Tray failed: " + e.getMessage()); }
+                    }
+
+                    // 2. Repair Stickers
+                    if (pack.getStickers() != null) {
+                        for (Sticker s : pack.getStickers()) {
+                            File f = new File(packDir, s.imageFileName);
+                            if (!f.exists()) continue;
+
+                            StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(f);
+                            boolean needsFix = false;
+
+                            if (!info.isAnimated) {
+                                if (info.width != 512 || info.height != 512 || f.length() > 100 * 1024) {
+                                    needsFix = true;
+                                }
+                            } else {
+                                if (info.width != 512 || info.height != 512) {
+                                    postLog(logText, sv, "  ⚠ Animated sticker wrong size (" + info.width + "x" + info.height + "). Resizing animated WebP is limited.");
+                                }
+
+                                postLog(logText, sv, "  ⚙ Cleaning Metadata: " + s.imageFileName);
+                                if (StickerProcessor.stripWebPMetadata(f)) {
+                                    postLog(logText, sv, "    ✓ Metadata stripped.");
+                                    fixedCount++;
+                                } else {
+                                    postLog(logText, sv, "    · No metadata found.");
+                                }
+
+                                if (f.length() > 500 * 1024) {
+                                    postLog(logText, sv, "  ✖ CRITICAL: Animated sticker still over 500KB (" + Formatter.formatShortFileSize(this, f.length()) + ")");
+                                }
+                            }
+
+                            if (needsFix && !info.isAnimated) {
+                                try {
+                                    postLog(logText, sv, "  ⚙ Standardizing Static: " + s.imageFileName);
+                                    StickerProcessor.processStaticSticker(f, f);
+                                    postLog(logText, sv, "    ✓ Fixed (512x512).");
+                                    fixedCount++;
+                                } catch (Exception e) {
+                                    postLog(logText, sv, "    ✖ Failed: " + e.getMessage());
+                                }
                             }
                         }
                     }
