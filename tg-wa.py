@@ -24,26 +24,20 @@ import sys
 import shutil
 import emoji
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Configure logging to only show INFO and higher for cleaner output by default
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Suppress verbose pyrogram logs
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 
-# Get environment variables
 API_ID = os.getenv("API_ID")
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = int(os.getenv("OWNER_ID", 0))
 
-# Validate environment variables
 if not API_ID or not API_HASH or not BOT_TOKEN:
     logger.error("Missing environment variables in .env file!")
     logger.info("Please create a .env file with API_ID, API_HASH, and BOT_TOKEN")
@@ -58,10 +52,11 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# Authorized chats mechanism (whitelist for groups)
 BASE_DIR = Path(__file__).resolve().parent
 AUTHORIZED_CHATS_FILE = BASE_DIR / 'authorized_chats.json'
+CONFIG_FILE = BASE_DIR / 'config.json'
 APP_URL = "http://github.com/maxcodl/MochiMochi/releases/"
+
 try:
     with open(AUTHORIZED_CHATS_FILE, 'r') as f:
         AUTHORIZED_CHATS = set(json.load(f))
@@ -71,39 +66,49 @@ except Exception as e:
     logger.error(f"Error loading authorized chats: {e}")
     AUTHORIZED_CHATS = set()
 
-def save_authorized_chats():
-    """Saves authorized chat IDs to a JSON file."""
+# ── Resource / settings config ───────────────────────────────────────────────
+# These values control how much CPU and RAM the bot uses during conversion.
+# They are persisted in config.json and editable at runtime via /settings.
+
+CONFIG_DEFAULTS = {
+    "max_concurrent":      5,   # simultaneous sticker downloads/conversions
+    "process_pool_workers": 2,  # TGS lottie render worker processes
+    "ffmpeg_threads":      2,   # threads passed to ffmpeg for video decode
+    "tgs_render_timeout":  60,  # seconds before an in-process TGS render is aborted
+}
+
+def _load_config() -> dict:
     try:
-        with open(AUTHORIZED_CHATS_FILE, 'w') as f:
-            json.dump(list(AUTHORIZED_CHATS), f)
-        logger.info("Authorized chats saved.")
+        with open(CONFIG_FILE, 'r') as f:
+            data = json.load(f)
+        merged = {**CONFIG_DEFAULTS, **data}
+        return merged
+    except FileNotFoundError:
+        return dict(CONFIG_DEFAULTS)
     except Exception as e:
-        logger.error(f"Error saving authorized chats: {e}")
+        logger.error(f"Error loading config: {e}")
+        return dict(CONFIG_DEFAULTS)
 
-def sanitize_filename(name: str) -> str:
-    """Stricter sanitization for filesystem and Telegram compatibility."""
-    # 1. Remove leading @ symbol (causes WhatsApp URI parsing failures)
-    name = name.lstrip("@")
-    # 2. Remove dots specifically (they are the main cause of extension mangling)
-    name = name.replace(".", "")
-    # 3. Remove non-ASCII characters/emojis for the filename only
-    name = name.encode("ascii", "ignore").decode("ascii")
-    # 4. Remove invalid OS characters
-    name = re.sub(r'[<>:"/\\|?*]', '', name)
-    # 5. Replace spaces and hyphens with underscores
-    name = re.sub(r'[\s-]+', '_', name).strip("_")
-    
-    # Return a fallback if the name became empty (e.g. it was all emojis)
-    return name[:50] if name else "sticker_pack"
+def _save_config(cfg: dict):
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(cfg, f, indent=2)
+        logger.info(f"Config saved: {cfg}")
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
 
+CONFIG = _load_config()
 
-# WhatsApp sticker hard limits
-WA_MAX_BYTES   = 488 * 1024  # under 500,000 decimal bytes (WhatsApp hard limit)
-WA_ANIM_TARGET = 460 * 1024  # tighter encode target to avoid >500,000 byte outputs
+def _cfg(key: str):
+    """Read a config value (always up-to-date from the in-memory dict)."""
+    return CONFIG.get(key, CONFIG_DEFAULTS[key])
 
-# Shared HTTP session (reduces TCP/TLS setup overhead per sticker request).
+# ── WhatsApp sticker hard limits ─────────────────────────────────────────────
+WA_MAX_BYTES   = 488 * 1024
+WA_ANIM_TARGET = 460 * 1024
+
+# ── Shared HTTP session ───────────────────────────────────────────────────────
 _HTTP_SESSION: aiohttp.ClientSession | None = None
-
 
 async def _get_http_session() -> aiohttp.ClientSession:
     global _HTTP_SESSION
@@ -112,29 +117,59 @@ async def _get_http_session() -> aiohttp.ClientSession:
         _HTTP_SESSION = aiohttp.ClientSession(timeout=timeout)
     return _HTTP_SESSION
 
-
 async def _run_cpu_bound(func, *args):
     """Run CPU-heavy sync work in a worker thread to avoid blocking the event loop."""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: func(*args))
 
-
 def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
     img = Image.open(BytesIO(sticker_data))
     return convert_to_whatsapp_static(img)
 
-def build_open_app_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Install / Update App", url=APP_URL)]
-    ])
+# ── ProcessPoolExecutor (lazy, size driven by config) ────────────────────────
+_PROCESS_POOL: concurrent.futures.ProcessPoolExecutor | None = None
 
+def _get_process_pool() -> concurrent.futures.ProcessPoolExecutor:
+    global _PROCESS_POOL
+    workers = _cfg("process_pool_workers")
+    if _PROCESS_POOL is None:
+        _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(max_workers=workers)
+        logger.info(f"ProcessPoolExecutor created with max_workers={workers}")
+    return _PROCESS_POOL
 
+def _rebuild_process_pool(workers: int):
+    """Shut down the existing pool and create a new one with updated worker count."""
+    global _PROCESS_POOL
+    if _PROCESS_POOL is not None:
+        _PROCESS_POOL.shutdown(wait=False)
+        _PROCESS_POOL = None
+    _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(max_workers=workers)
+    logger.info(f"ProcessPoolExecutor rebuilt with max_workers={workers}")
+
+# ── Authorised chats ──────────────────────────────────────────────────────────
+def save_authorized_chats():
+    try:
+        with open(AUTHORIZED_CHATS_FILE, 'w') as f:
+            json.dump(list(AUTHORIZED_CHATS), f)
+        logger.info("Authorized chats saved.")
+    except Exception as e:
+        logger.error(f"Error saving authorized chats: {e}")
+
+# ── Filename sanitisation ─────────────────────────────────────────────────────
+def sanitize_filename(name: str) -> str:
+    name = name.lstrip("@")
+    name = name.replace(".", "")
+    name = name.encode("ascii", "ignore").decode("ascii")
+    name = re.sub(r'[<>:"/\\|?*]', '', name)
+    name = re.sub(r'[\s-]+', '_', name).strip("_")
+    return name[:50] if name else "sticker_pack"
+
+# ── WebP helpers ──────────────────────────────────────────────────────────────
 def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[bool, str]:
     if not data or len(data) < 128:
         return False, "Converted output is empty or too small"
     if len(data) < 12 or data[0:4] != b'RIFF' or data[8:12] != b'WEBP':
         return False, "Converted output is not a valid WebP container"
-
     try:
         with Image.open(BytesIO(data)) as check:
             if check.width != 512 or check.height != 512:
@@ -142,46 +177,29 @@ def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[b
             if require_animated:
                 if not _is_animated_webp_bytes(data):
                     return False, "Expected animated WebP but got static output"
-                # Count ANMF frames — WhatsApp requires >= 2 for animated packs
                 frame_count = _count_webp_frames(data)
                 if frame_count < 2:
                     return False, f"Animated WebP has only {frame_count} frame(s); WhatsApp requires >= 2"
     except Exception as e:
         return False, f"Cannot decode converted WebP: {e}"
-
-    # Size gate — WhatsApp rejects stickers >500 KB
     if len(data) > WA_MAX_BYTES:
         return False, f"Converted sticker is {len(data) // 1024}KB, exceeds WhatsApp's 500KB limit"
-
     return True, ""
 
 async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool, file_id: str) -> dict:
-    """
-    Verifies sticker data for corruption, emptiness, and validity.
-    Returns dict with 'valid': bool, 'reason': str, 'warnings': list
-    """
-    result = {
-        'valid': True,
-        'reason': '',
-        'warnings': []
-    }
-    
+    result = {'valid': True, 'reason': '', 'warnings': []}
     try:
-        # Check 1: Basic file size validation (strict 3KB minimum)
-        min_size = 3 * 1024  # 3KB minimum
+        min_size = 3 * 1024
         if len(sticker_data) < min_size:
             result['valid'] = False
             result['reason'] = f"File too small ({len(sticker_data)} bytes, minimum: {min_size} bytes) - likely corrupt or invalid"
             return result
-        
-        # Check 2: Maximum size check
-        max_size = 500 * 1024  # 500KB max for WhatsApp
+
+        max_size = 500 * 1024
         if len(sticker_data) > max_size:
             result['warnings'].append(f"Large file ({len(sticker_data)} bytes), will be compressed")
-        
-        # Check 3: Verify file format based on type
+
         if is_animated:
-            # TGS files should be gzipped JSON
             try:
                 with gzip.open(BytesIO(sticker_data), 'rb') as f:
                     json_data = f.read()
@@ -193,36 +211,27 @@ async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool,
                 result['valid'] = False
                 result['reason'] = f"Invalid TGS format: {str(e)}"
                 return result
-                
+
         elif is_video:
-            # WebM magic bytes check: EBML header 0x1A 0x45 0xDF 0xA3
-            # Full validation (duration, streams) happens during conversion — no temp file needed here.
             if not (len(sticker_data) >= 4 and sticker_data[:4] == b'\x1a\x45\xdf\xa3'):
                 result['valid'] = False
                 result['reason'] = "Not a valid WebM file (bad magic bytes)"
                 return result
-        
+
         else:
-            # Static image - check with PIL
             try:
                 img = Image.open(BytesIO(sticker_data))
-                
-                # Verify image can be loaded
                 img.verify()
-                
-                # Re-open for further checks (verify() closes the image)
                 img = Image.open(BytesIO(sticker_data))
-                
-                # Check dimensions
+
                 if img.width < 10 or img.height < 10:
                     result['valid'] = False
                     result['reason'] = f"Image too small ({img.width}x{img.height})"
                     return result
-                
+
                 if img.width > 5000 or img.height > 5000:
                     result['warnings'].append(f"Large dimensions ({img.width}x{img.height}), will be resized")
-                
-                # Check if image is completely transparent/empty
+
                 if img.mode in ('RGBA', 'LA'):
                     import numpy as np
                     alpha = np.array(img.convert('RGBA'))[:, :, 3]
@@ -231,39 +240,32 @@ async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool,
                         result['valid'] = False
                         result['reason'] = "Image is completely transparent (empty)"
                         return result
-                    # Check if image has very little content (>95% transparent)
                     transparency_ratio = float((alpha < 10).sum()) / alpha.size
                     if transparency_ratio > 0.95:
                         result['warnings'].append(f"Image is {transparency_ratio*100:.1f}% transparent")
-                
-                # Check if image is all white/single color
+
                 extrema = img.convert('RGB').getextrema()
                 if all(min_val == max_val for min_val, max_val in extrema):
                     result['warnings'].append("Image appears to be solid color")
-                    
+
             except Exception as e:
                 result['valid'] = False
+                # FIX: catch PIL's UnidentifiedImageError regardless of Pillow version
                 result['reason'] = f"Invalid image format: {str(e)}"
                 return result
-        
+
         logger.info(f"Sticker {file_id[-8:]} verified: valid={result['valid']}, warnings={len(result['warnings'])}")
         return result
-        
+
     except Exception as e:
         result['valid'] = False
         result['reason'] = f"Verification error: {str(e)}"
         return result
 
 def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
-    """
-    Optimizes tray icon to be under 50KB and 96x96 pixels, returning BytesIO.
-    Correctly preserves alpha/transparency in all code paths.
-    """
     try:
         if is_animated:
-            # Detect TGS (gzip-compressed Lottie JSON) by magic bytes \x1f\x8b
             is_tgs = len(tray_data) >= 2 and tray_data[:2] == b'\x1f\x8b'
-
             if is_tgs:
                 import gzip as _gzip
                 json_bytes = _gzip.decompress(tray_data)
@@ -278,12 +280,10 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
                     img = img.resize((96, 96), Image.LANCZOS)
                     logger.info("Rendered TGS first frame via lottie/cairo for tray icon")
                 except Exception as e:
+                    # FIX: log which import/render step failed so debugging isn't blind
+                    logger.debug(f"lottie cairo render failed for tray icon: {e}")
                     raise Exception(f"lottie cairo render failed: {e}")
             else:
-                # WebM / video sticker — extract first frame via ffmpeg, keeping alpha plane.
-                # IMPORTANT: must use '-c:v libvpx-vp9' (software decoder) because the
-                # hardware VP9 decoder does not expose the VP9 alpha plane, causing a black
-                # background. libvpx-vp9 correctly decodes both the RGB and alpha streams.
                 logger.info("Extracting first frame from animated sticker for tray icon")
                 with tempfile.TemporaryDirectory() as tmpdir:
                     tmppath = Path(tmpdir)
@@ -292,7 +292,6 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
                     output_path = tmppath / "frame.png"
 
                     img = None
-                    # Try Pillow first — handles animated WebP natively with correct alpha
                     try:
                         tmp_img = Image.open(BytesIO(tray_data))
                         tmp_img.seek(0)
@@ -302,8 +301,6 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
                         img = None
 
                     if img is None:
-                        # Fall back to ffmpeg; try libvpx-vp9 first (exposes VP9 alpha plane),
-                        # then retry without decoder override for non-VP9 formats.
                         for decoder_args in (['-c:v', 'libvpx-vp9'], []):
                             cmd = [
                                 'ffmpeg', '-y',
@@ -331,24 +328,14 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
         logger.warning(f"Tray icon conversion failed, using transparent placeholder: {e}")
         img = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
 
-    # Simple transparency-preserving resize
     if img.mode != "RGBA":
         img = img.convert("RGBA")
-    
-    # Create transparent 96x96 canvas
+
     canvas = Image.new("RGBA", (96, 96), (0, 0, 0, 0))
-    
-    # Resize image to fit within 96x96 while maintaining aspect ratio
     img.thumbnail((96, 96), Image.LANCZOS)
-    
-    # Center the image on transparent canvas
-    position = (
-        (96 - img.width) // 2,
-        (96 - img.height) // 2
-    )
+    position = ((96 - img.width) // 2, (96 - img.height) // 2)
     canvas.paste(img, position, img)
 
-    # PNG uses compress_level, NOT quality
     output = BytesIO()
     for compress_level in range(3, 10):
         output.seek(0)
@@ -360,108 +347,71 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
     output.seek(0)
     return output
 
-
 def parse_frame_rate(fps_string: str) -> float:
-    """
-    Safely parse ffmpeg frame rate string like "25/1" or "30000/1001".
-    Returns float fps value (e.g., 25.0 or 29.97).
-    """
     try:
         if '/' in fps_string:
             num, denom = fps_string.split('/')
-            return float(num) / float(denom)
+            n, d = float(num), float(denom)
+            if d == 0:
+                # FIX: log bad value instead of silently swallowing ZeroDivisionError
+                logger.warning(f"parse_frame_rate: zero denominator in '{fps_string}', falling back to 15fps")
+                return 15.0
+            return n / d
         else:
             return float(fps_string)
-    except (ValueError, ZeroDivisionError):
-        return 15.0  # Default fallback
-
+    except ValueError:
+        logger.warning(f"parse_frame_rate: cannot parse '{fps_string}', falling back to 15fps")
+        return 15.0
 
 def convert_to_whatsapp_static(img: Image.Image) -> BytesIO:
-    """
-    Converts a PIL Image to WhatsApp-compatible static WebP.
-    
-    WhatsApp Official Specs:
-    - Dimensions: Exactly 512x512 pixels
-    - Format: WebP
-    - File size: ≤100KB
-    - Transparent background
-    """
     if img.mode != "RGBA":
         img = img.convert("RGBA")
-    
-    # Create 512x512 canvas with transparent background (per WhatsApp specs)
     canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
     img.thumbnail((512, 512), Image.LANCZOS)
-    
-    position = (
-        (512 - img.width) // 2,
-        (512 - img.height) // 2
-    )
+    position = ((512 - img.width) // 2, (512 - img.height) // 2)
     canvas.paste(img, position, img)
-    
-    # Optimize to meet 100KB requirement
+
     output = BytesIO()
     quality = 95
     max_attempts = 10
-    
     for attempt in range(max_attempts):
         output.seek(0)
         output.truncate(0)
         canvas.save(output, format="WEBP", quality=quality)
         size = output.tell()
-        
-        if size <= 100 * 1024:  # 100KB per WhatsApp spec
+        if size <= 100 * 1024:
             break
-        
         if quality > 75:
             quality -= 5
         elif quality > 50:
             quality -= 10
         else:
             quality -= 15
-            
         if quality < 5:
             logger.warning(f"Static sticker is {size/1024:.1f}KB, exceeds 100KB limit")
             break
-    
+
     output.seek(0)
     return output
 
 def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
-    """
-    Converts a static PIL Image into a guaranteed animated WebP.
-    This is used to allow mixing static stickers into an animated pack.
-    """
     if img.mode != "RGBA":
         img = img.convert("RGBA")
-    
-    # Create 512x512 canvas with transparent background
     canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
     img.thumbnail((512, 512), Image.LANCZOS)
-    
-    position = (
-        (512 - img.width) // 2,
-        (512 - img.height) // 2
-    )
+    position = ((512 - img.width) // 2, (512 - img.height) // 2)
     canvas.paste(img, position, img)
-    
-    output = BytesIO()
 
-    # Create a second near-identical frame to guarantee ANIM chunk presence.
+    output = BytesIO()
     frame2 = canvas.copy()
     px = frame2.load()
     r, g, b, a = px[0, 0]
     px[0, 0] = (r, g, b, 1 if a == 0 else 0)
 
     attempts = [
-        (85, 0, 90),
-        (75, 0, 85),
-        (65, 4, 80),
-        (55, 4, 75),
-        (45, 6, 70),
-        (35, 6, 65),
+        (85, 0, 90), (75, 0, 85), (65, 4, 80),
+        (55, 4, 75), (45, 6, 70), (35, 6, 65),
     ]
-
     for quality, method, alpha_quality in attempts:
         output.seek(0)
         output.truncate(0)
@@ -481,27 +431,14 @@ def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
 
     raise Exception("Could not encode one-frame animation under 500KB")
 
-
-
-
 def _encode_animated_webp_under_limit(
     pil_frames: list,
     frame_duration_ms: int,
     max_size: int = 490 * 1024,
 ) -> BytesIO:
-    """
-    Encode an animated WebP that fits within *max_size* bytes.
-
-    Balanced speed/smoothness strategy:
-    1) Fast encoder pass first (close to old performance).
-    2) Heavier compression fallback only when needed.
-    3) Decimate frames only as a last resort.
-    Preserves transparency via kmax=1 + allow_mixed + alpha_quality.
-    """
-    # CRITICAL: Ensure we have at least 2 frames for animation
     if len(pil_frames) < 2:
         raise Exception(f"Cannot create animated WebP with only {len(pil_frames)} frame(s). Need at least 2.")
-    
+
     def _try(frames, dur_ms, q, method, alpha_q=90):
         buf = BytesIO()
         frames[0].save(
@@ -509,9 +446,9 @@ def _encode_animated_webp_under_limit(
             append_images=frames[1:],
             duration=dur_ms, loop=0,
             quality=q, method=method,
-            kmax=1,                    # every frame is a keyframe → no transparent bleed
-            allow_mixed=True,          # lossless alpha + lossy colour per frame
-            alpha_quality=alpha_q,      # high-quality alpha plane
+            kmax=1,
+            allow_mixed=True,
+            alpha_quality=alpha_q,
             background=(0, 0, 0, 0),
         )
         return buf
@@ -525,10 +462,7 @@ def _encode_animated_webp_under_limit(
                 return buf, q, sz, method
         return None, None, 0, None
 
-    # Keep full frame cadence by default; only decimate if absolutely necessary.
-    # Extra rescue levels (3x/4x) help salvage hard stickers that otherwise get skipped.
     decimation_levels = [1, 2, 3, 4]
-    
     for decimation in decimation_levels:
         if decimation == 1:
             cur_frames = pil_frames
@@ -536,46 +470,24 @@ def _encode_animated_webp_under_limit(
         else:
             cur_frames = pil_frames[::decimation]
             cur_dur    = min(frame_duration_ms * decimation, 1000)
-            
-            # Skip decimation levels that would produce inadequate frame counts
             if len(cur_frames) < 2:
-                logger.debug(
-                    f"Decimation {decimation}x would yield {len(cur_frames)} frame(s) - skipping"
-                )
+                logger.debug(f"Decimation {decimation}x would yield {len(cur_frames)} frame(s) - skipping")
                 continue
-            
             logger.info(
                 f"Animated WebP still too large — decimating to every {decimation}th frame "
                 f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
             )
 
-        # Pass 1: fast encode path (restores prior speed profile).
         best_buf, best_q, best_size, used_method = _quality_search(
-            cur_frames,
-            cur_dur,
-            qualities=[72, 58, 46, 34, 24],
-            method=0,
+            cur_frames, cur_dur, qualities=[72, 58, 46, 34, 24], method=0,
         )
-
-        # Pass 2: denser compression fallback — only worth running at reduced frame
-        # counts (decimation>=2). At full frame count, method=4 is extremely slow and
-        # the sticker almost always needs decimation anyway; skip straight to it.
         if best_buf is None and decimation >= 2:
             best_buf, best_q, best_size, used_method = _quality_search(
-                cur_frames,
-                cur_dur,
-                qualities=[50, 38, 28, 20],
-                method=4,
+                cur_frames, cur_dur, qualities=[50, 38, 28, 20], method=4,
             )
-
-        # Pass 3: aggressive alpha/quality fallback for stubborn stickers.
         if best_buf is None and decimation >= 2:
             best_buf, best_q, best_size, used_method = _quality_search(
-                cur_frames,
-                cur_dur,
-                qualities=[26, 20, 16, 12],
-                method=6,
-                alpha_q=70,
+                cur_frames, cur_dur, qualities=[26, 20, 16, 12], method=6, alpha_q=70,
             )
 
         if best_buf is not None:
@@ -586,22 +498,15 @@ def _encode_animated_webp_under_limit(
             )
             return best_buf
 
-        logger.info(
-            f"Still over limit at decimation={decimation}x after fast+fallback encode — "
-            f"trying more aggressive decimation…"
-        )
+        logger.info(f"Still over limit at decimation={decimation}x — trying more aggressive decimation…")
 
-    # No decimation level produced acceptable result - fail
     raise Exception(
         f"Could not encode animated WebP under {max_size // 1024}KB limit even with "
         f"maximum decimation (4x) and minimum fallback quality (12). "
         f"Sticker is too complex to convert."
     )
 
-
-# ── TGS in-process renderer ─────────────────────────────────────────────────
-# Must be a module-level (top-level) function so ProcessPoolExecutor can
-# pickle it across worker processes on Windows (spawn start method).
+# ── TGS in-process renderer ───────────────────────────────────────────────────
 def _tgs_render_frames_sync(json_bytes: bytes, ip: int, n_frames: int) -> list:
     from io import BytesIO
     from lottie.parsers.tgs import parse_tgs_json
@@ -615,24 +520,7 @@ def _tgs_render_frames_sync(json_bytes: bytes, ip: int, n_frames: int) -> list:
         raw_frames.append(buf.getvalue())
     return raw_frames
 
-_PROCESS_POOL = None
-
-
-def _get_process_pool():
-    """Lazy-init ProcessPoolExecutor — avoids recursive pool creation in workers."""
-    global _PROCESS_POOL
-    if _PROCESS_POOL is None:
-        _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(max_workers=2)
-    return _PROCESS_POOL
-# ────────────────────────────────────────────────────────────────────────────
-
-
 async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
-    """
-    Convert Telegram's TGS format (Lottie JSON in gzip) to animated WebP.
-    Renders frames in a ProcessPoolExecutor (bypasses GIL for concurrent TGS
-    packs) with a subprocess GIF fallback if the lottie library is unavailable.
-    """
     import json as _json
 
     try:
@@ -649,17 +537,21 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
     except Exception:
         fps, in_point, out_point = 30.0, 0, 90
 
-    # Cap at 120 frames (~4s at 30fps) to bound memory and encode time.
     render_frames     = min(max(1, out_point - in_point), int(10.0 * fps), 120)
     frame_duration_ms = max(8, int(1000.0 / fps))
 
     pil_frames = None
     try:
         loop = asyncio.get_running_loop()
-        raw_frames = await loop.run_in_executor(
-            _get_process_pool(), _tgs_render_frames_sync, json_data, in_point, render_frames
+        timeout_secs = _cfg("tgs_render_timeout")
+        # FIX: wrap in asyncio.wait_for to prevent runaway TGS renders from blocking forever
+        raw_frames = await asyncio.wait_for(
+            loop.run_in_executor(
+                _get_process_pool(),
+                _tgs_render_frames_sync, json_data, in_point, render_frames
+            ),
+            timeout=timeout_secs,
         )
-        # Build PIL frames in the main process (PIL images don't pickle well)
         pil_frames = []
         for raw in raw_frames:
             img = Image.open(BytesIO(raw)).convert("RGBA")
@@ -668,11 +560,13 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
             canvas.paste(img, ((512 - img.width) // 2, (512 - img.height) // 2), img)
             pil_frames.append(canvas)
         logger.info(f"Rendered {len(pil_frames)} TGS frames in-process")
+    except asyncio.TimeoutError:
+        logger.warning(f"TGS in-process render timed out after {timeout_secs}s, falling back to GIF")
+        pil_frames = None
     except Exception as png_err:
         logger.warning(f"In-process lottie render failed: {png_err}, falling back to GIF subprocess")
 
     if pil_frames is None or len(pil_frames) < 2:
-        # GIF fallback: lottie CLI → convert_video_to_animated_webp (ffmpeg path)
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             json_path = tmppath / "sticker.json"
@@ -700,16 +594,7 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
     logger.info(f"✓ TGS → animated WebP: {len(pil_frames)} frames, {output_size // 1024}KB")
     return output
 
-
 async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
-    """
-    Converts a WebM/video file to an animated WebP.
-
-    Strategy: use ffmpeg ONLY to extract RGBA PNG frames (it handles VP9+alpha correctly),
-    then use PIL to assemble the animated WebP — the same approach used for TGS stickers.
-    This avoids all libwebp encoder alpha issues (black background bugs) that occur when
-    ffmpeg encodes WebP directly.
-    """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
         input_path = tmppath / "input.tmp"
@@ -717,28 +602,23 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         frames_dir = tmppath / "frames"
         frames_dir.mkdir()
 
-        # --- 1. Probe input to get fps and duration ---
         try:
             probe = await _run_cpu_bound(ffmpeg.probe, str(input_path))
             video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
-            
-            # For WebM, format-level duration is more reliable than stream-level
-            # Try format duration first, then stream duration, then calculate from frame count
             format_duration = probe.get('format', {}).get('duration')
             stream_duration = video_info.get('duration')
             nb_frames = video_info.get('nb_frames')
-            
+
             if format_duration and float(format_duration) > 0.1:
                 duration = float(format_duration)
             elif stream_duration and float(stream_duration) > 0.1:
                 duration = float(stream_duration)
             elif nb_frames and int(nb_frames) > 0:
-                # Calculate from frame count and fps
                 input_fps = parse_frame_rate(video_info.get('r_frame_rate', '30/1'))
                 duration = int(nb_frames) / input_fps
             else:
                 duration = 0.0
-            
+
             input_fps = parse_frame_rate(video_info.get('r_frame_rate', '15/1'))
             logger.info(f"Video probe: format_duration={format_duration}s, stream_duration={stream_duration}s, fps={input_fps:.2f}, frames={nb_frames}")
         except Exception as e:
@@ -746,28 +626,20 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
             duration = 0.0
             input_fps = 15.0
 
-        # For WebM stickers, duration metadata is often broken (reports 0.001-0.002s for 1-2s videos).
-        # 20fps is visually smooth at sticker size and cuts frame count by ~17% vs 24fps,
-        # reducing encode time accordingly.
         target_fps = min(input_fps, 20.0)
         target_fps = max(target_fps, 8.0)
         frame_duration_ms = max(8, int(1000.0 / target_fps))
-        
-        # Cap frames so total animation duration never exceeds WhatsApp's 10-second limit.
-        # (duration metadata in WebM stickers is unreliable, so we cap by frame count instead.)
         max_frames = min(240, int(10000 / frame_duration_ms))
 
-        # --- 2. Extract frames as RGBA PNG using ffmpeg ---
-        # Force -c:v libvpx-vp9 (software decoder) — same as sticker-convert's
-        # CodecContext.create("libvpx-vp9", "r"). The hardware vp9 decoder does NOT
-        # expose the VP9 alpha plane; the software libvpx-vp9 decoder does.
-        # Extract ALL available frames up to max_frames (ignoring broken duration metadata)
+        # Pass ffmpeg_threads from config so users can tune CPU load
+        ffmpeg_threads = _cfg("ffmpeg_threads")
         extract_cmd = [
             'ffmpeg', '-y',
-            '-c:v', 'libvpx-vp9',       # force software decoder to get alpha plane
+            '-c:v', 'libvpx-vp9',
+            '-threads', str(ffmpeg_threads),
             '-i', str(input_path),
             '-vf', f'fps={target_fps},format=rgba',
-            '-vframes', str(max_frames),  # safety limit only
+            '-vframes', str(max_frames),
             '-vsync', 'cfr',
             str(frames_dir / 'frame_%04d.png')
         ]
@@ -785,12 +657,11 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
             raise Exception("ffmpeg produced no frames from video")
         logger.info(f"Extracted {len(frame_files)} RGBA PNG frames from video")
 
-        # --- 3. Build 512×512 RGBA PIL frames (transparent letterbox padding) ---
         pil_frames = []
         for ff in frame_files:
             try:
                 img = Image.open(ff).convert("RGBA")
-                canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))  # fully transparent
+                canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
                 img.thumbnail((512, 512), Image.LANCZOS)
                 x = (512 - img.width) // 2
                 y = (512 - img.height) // 2
@@ -802,28 +673,20 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         if len(pil_frames) == 0:
             raise Exception("No valid frames could be decoded from video")
         if len(pil_frames) == 1:
-            # Single-frame video sticker — duplicate frame so WhatsApp accepts it as animated
             logger.warning("Video sticker has only 1 frame; duplicating to satisfy WhatsApp animated requirement")
             pil_frames = pil_frames * 2
 
-        # --- 4. Encode animated WebP using shared helper ---
-        # Uses finer quality steps + frame decimation to guarantee ≤500KB
-        # while keeping kmax=1 / allow_mixed / alpha_quality intact.
         output = await _run_cpu_bound(
-            _encode_animated_webp_under_limit,
-            pil_frames,
-            frame_duration_ms,
-            WA_ANIM_TARGET,
+            _encode_animated_webp_under_limit, pil_frames, frame_duration_ms, WA_ANIM_TARGET,
         )
         final_size = output.seek(0, 2)
         output.seek(0)
-        
-        # CRITICAL: Verify output is under 500KB hard limit
+
         if final_size > WA_MAX_BYTES:
             raise Exception(f"Encoded output is {final_size // 1024}KB, exceeds 500KB hard limit")
         if final_size > WA_ANIM_TARGET:
             raise Exception(f"Encoder bug: output is {final_size // 1024}KB, exceeds target {WA_ANIM_TARGET // 1024}KB")
-        
+
         logger.info(
             f"✓ Video → animated WebP: "
             f"{len(pil_frames)} source frames, {final_size / 1024:.1f}KB, "
@@ -831,12 +694,7 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         )
         return output
 
-
 async def convert_to_whatsapp_animated(file_data: bytes, is_tgs: bool) -> BytesIO:
-    """
-    Converts TGS or WebM data to an animated WebP.
-    Raises Exception if conversion fails — callers must handle the fallback.
-    """
     if is_tgs:
         logger.info("Converting TGS sticker to animated WebP...")
         return await convert_tgs_to_animated_webp(file_data)
@@ -844,51 +702,41 @@ async def convert_to_whatsapp_animated(file_data: bytes, is_tgs: bool) -> BytesI
         logger.info("Converting video sticker to animated WebP...")
         return await convert_video_to_animated_webp(file_data)
 
-
 def _is_animated_webp_bytes(data: bytes) -> bool:
-    """Check if raw bytes represent an animated WebP (has VP8X chunk with ANIM flag)."""
     if len(data) < 30:
         return False
     if data[0:4] != b'RIFF' or data[8:12] != b'WEBP':
         return False
-    
-    # Check for VP8X chunk (extended format with animation flag)
     if data[12:16] == b'VP8X':
         flags = data[20] & 0xFF
-        return bool(flags & 0x02)  # Animation bit
-    
-    # Check for ANIM chunk (older format)
-    # Search first 512 bytes for ANIM chunk
+        return bool(flags & 0x02)
     search_end = min(len(data), 512)
     if b'ANIM' in data[12:search_end]:
         return True
-    
-    # If neither VP8X with anim flag nor ANIM chunk found, it's static
     return False
 
-
 def _count_webp_frames(data: bytes) -> int:
-    """Count the number of ANMF frames in an animated WebP. Returns 1 for static WebP."""
     import struct as _struct
     count = 0
     pos = 12
     while pos + 8 <= len(data):
         cid = data[pos:pos+4]
         csz = _struct.unpack_from('<I', data, pos+4)[0]
+        # FIX: guard against malformed/corrupt chunk sizes that would loop forever
+        if csz > len(data):
+            logger.debug(f"_count_webp_frames: oversized chunk at pos={pos} (csz={csz}), stopping")
+            break
         if cid == b'ANMF':
             count += 1
         pos += 8 + csz + (csz & 1)
     return count if count > 0 else 1
 
-
 def split_stickers_by_type(stickers: list):
-    """Splits stickers into static and animated/video lists."""
     static = [s for s in stickers if not (s.is_animated or s.is_video)]
     animated = [s for s in stickers if s.is_animated or s.is_video]
     return static, animated
 
 def classify_sticker_files(files: list) -> tuple[list, list]:
-    """Splits a list of Path objects into (static_files, animated_files)."""
     static_files = []
     animated_files = []
     for f in files:
@@ -909,17 +757,9 @@ def classify_sticker_files(files: list) -> tuple[list, list]:
     return static_files, animated_files
 
 def split_into_chunks(items: list, max_per_chunk: int = 30) -> list:
-    """Splits list into chunks of max_per_chunk size."""
     return [items[i:i + max_per_chunk] for i in range(0, len(items), max_per_chunk)]
 
-def _build_contents_json(
-    identifier: str,
-    name: str,
-    publisher: str,
-    emoji_map: dict,
-    animated: bool,
-) -> dict:
-    """Build a WhatsApp-compliant contents.json structure."""
+def _build_contents_json(identifier, name, publisher, emoji_map, animated) -> dict:
     stickers_array = [
         {"image_file": fname, "emojis": emojis if emojis else ["😊"]}
         for fname, emojis in emoji_map.items()
@@ -944,11 +784,6 @@ def _build_contents_json(
     }
 
 class SimpleSticker:
-    """Lightweight sticker descriptor used throughout the bot.
-
-    ``emojis`` is a list of 1-3 emoji strings associated with this sticker.
-    Pass either a list or a bare string; a bare string is wrapped automatically.
-    """
     def __init__(self, file_id, is_animated, is_video, emojis):
         self.file_id = file_id
         self.is_animated = is_animated
@@ -958,34 +793,19 @@ class SimpleSticker:
         else:
             self.emojis: list[str] = list(emojis)[:3] if emojis else ["\U0001F600"]
 
-    # Backward-compat shim: code that still reads .emoji gets the primary emoji.
     @property
     def emoji(self) -> str:
         return self.emojis[0] if self.emojis else "\U0001F600"
 
-
 async def fetch_pack_emoji_map(set_name: str) -> dict:
-    """Return {sticker_index: [emoji, ...]} (up to 3 emojis per sticker) for *set_name*.
-
-    Uses pyrogram's MTProto API to access the ``packs`` field of
-    ``messages.getStickerSet``, which maps each emoji to the list of sticker
-    document IDs that belong to that emoji category.  We invert the mapping so
-    callers get a per-sticker emoji list.
-
-    Returns an empty dict on any error so callers can fall back to the single
-    emoji provided by the Bot API.
-    """
     try:
-        from pyrogram import raw as _raw  # local import to avoid circular issues
+        from pyrogram import raw as _raw
         result = await app.invoke(
             _raw.functions.messages.GetStickerSet(
                 stickerset=_raw.types.InputStickerSetShortName(short_name=set_name),
                 hash=0,
             )
         )
-
-        # result.packs: List[StickerPack] each with .emoticon and .documents (doc IDs)
-        # Build doc_id -> ordered list of emojis (capped at 3).
         doc_emoji: dict[int, list[str]] = {}
         for pack in result.packs:
             for doc_id in pack.documents:
@@ -993,7 +813,6 @@ async def fetch_pack_emoji_map(set_name: str) -> dict:
                 if pack.emoticon not in lst and len(lst) < 3:
                     lst.append(pack.emoticon)
 
-        # Map by position in result.documents (same order as Bot-API response).
         index_map: dict[int, list[str]] = {}
         for idx, doc in enumerate(result.documents):
             emojis = doc_emoji.get(doc.id)
@@ -1010,37 +829,110 @@ async def fetch_pack_emoji_map(set_name: str) -> dict:
         logger.warning(f"fetch_pack_emoji_map failed for '{set_name}': {e}")
         return {}
 
+# ── File download — FIX: chunked streaming, no full-file RAM buffer ───────────
+async def download_file_by_id(bot_token: str, file_id: str) -> bytes:
+    """Downloads a Telegram file by file_id using chunked streaming to cap RAM usage."""
+    session = await _get_http_session()
+
+    # FIX: use a local var for the URL so bot_token never appears in log output.
+    # We pass only the file_path (not the assembled URL) to logger.
+    get_url = f"https://api.telegram.org/bot{bot_token}/getFile"
+    async with session.get(get_url, params={"file_id": file_id}) as resp:
+        data = await resp.json()
+        if not data["ok"]:
+            raise Exception(data["description"])
+        file_path = data["result"]["file_path"]
+
+    _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
+    download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+
+    # FIX: stream in 64 KB chunks instead of resp.read() so we never hold the
+    # full file in RAM when content-length is unknown or huge.
+    CHUNK = 64 * 1024
+    async with session.get(download_url) as resp:
+        if resp.status != 200:
+            raise Exception(f"Failed to download file: HTTP {resp.status}")
+        content_length = resp.headers.get("Content-Length")
+        if content_length and int(content_length) > _MAX_DOWNLOAD_BYTES:
+            raise Exception(
+                f"File too large ({int(content_length) // 1024}KB), refusing download"
+            )
+        buf = BytesIO()
+        async for chunk in resp.content.iter_chunked(CHUNK):
+            buf.write(chunk)
+            if buf.tell() > _MAX_DOWNLOAD_BYTES:
+                raise Exception("File exceeded 20MB limit mid-download, aborting")
+        return buf.getvalue()
+
+async def get_sticker_set_via_bot_api(bot_token: str, name: str):
+    session = await _get_http_session()
+    url = f"https://api.telegram.org/bot{bot_token}/getStickerSet"
+    async with session.get(url, params={"name": name}) as resp:
+        data = await resp.json()
+        if not data["ok"]:
+            raise Exception(data["description"])
+        return data["result"]
+
+# ── Per-user rate limiting — FIX: prune stale entries to prevent memory leak ─
+_user_last_command: dict[int, float] = {}
+_RATE_LIMIT_SECONDS = 10
+_RATE_LIMIT_PRUNE_INTERVAL = 3600  # prune entries older than 1h
+
+def _prune_rate_limit_dict():
+    cutoff = time.monotonic() - _RATE_LIMIT_PRUNE_INTERVAL
+    stale = [uid for uid, ts in _user_last_command.items() if ts < cutoff]
+    for uid in stale:
+        del _user_last_command[uid]
+    if stale:
+        logger.debug(f"Pruned {len(stale)} stale rate-limit entries")
+
+def _is_rate_limited(user_id: int) -> bool:
+    _prune_rate_limit_dict()
+    now = time.monotonic()
+    last = _user_last_command.get(user_id, 0)
+    if now - last < _RATE_LIMIT_SECONDS:
+        return True
+    _user_last_command[user_id] = now
+    return False
+
+# ── Active sticker sessions — FIX: background TTL task ───────────────────────
+active_sticker_sessions = {}
+_SESSION_TTL = 3600
+
+async def _session_cleanup_loop():
+    """Background task: evict sticker sessions that are older than SESSION_TTL."""
+    while True:
+        await asyncio.sleep(300)
+        cutoff = time.monotonic() - _SESSION_TTL
+        stale = [k for k, v in active_sticker_sessions.items() if v.get("created_at", 0) < cutoff]
+        for k in stale:
+            active_sticker_sessions.pop(k, None)
+        if stale:
+            logger.info(f"Session cleanup: evicted {len(stale)} expired session(s)")
+
+# ── ZIP creation helpers ──────────────────────────────────────────────────────
 async def create_simple_zip(
     set_name: str,
     stickers: list,
     convert: bool = True,
     progress_callback=None
 ) -> tuple[Path, int]:
-    """Creates a simple ZIP file with stickers (with or without conversion).
-    Returns: (zip_path, valid_count)
-    """
     logger.info(f"Creating simple ZIP for: {set_name} (convert={convert})")
-    
     packs_dir = BASE_DIR / "wasticker_packs"
     packs_dir.mkdir(exist_ok=True)
-    
-    # Use a safe unique workdir name
+
     import uuid
-    unique_id = uuid.uuid4().hex[:8]
-    work_dir = packs_dir / f"simple_{set_name}_{unique_id}"
+    work_dir = packs_dir / f"simple_{set_name}_{uuid.uuid4().hex[:8]}"
     work_dir.mkdir(exist_ok=True)
-    
+
     valid_count = 0
     total = len(stickers)
-    stats = {
-        'skipped': 0,
-        'skipped_reasons': []
-    }
-    
-    sem = asyncio.Semaphore(5)
+    stats = {'skipped': 0, 'skipped_reasons': []}
+
+    # FIX: semaphore size now reads from config
+    sem = asyncio.Semaphore(_cfg("max_concurrent"))
 
     async def _process_one(i: int, sticker):
-        """Returns (index, data_bytes, extension, skip_reason_or_None)"""
         async with sem:
             try:
                 sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
@@ -1086,7 +978,6 @@ async def create_simple_zip(
         if not raw_results:
             raise ValueError("No valid stickers found after verification.")
 
-        # Write files in original order
         for idx, data, ext in sorted(raw_results, key=lambda x: x[0]):
             sticker_filename = f"sticker_{idx:03d}.{ext}"
             sticker_path = work_dir / sticker_filename
@@ -1094,7 +985,6 @@ async def create_simple_zip(
                 f.write(data)
             valid_count += 1
 
-        # Create ZIP
         zip_path = packs_dir / f"{set_name}.zip"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for file_path in sorted(work_dir.iterdir()):
@@ -1102,7 +992,6 @@ async def create_simple_zip(
 
         logger.info(f"Simple ZIP created: {zip_path} with {valid_count} stickers (skipped {stats['skipped']} invalid)")
         return zip_path, valid_count
-
     finally:
         if work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)
@@ -1116,81 +1005,51 @@ async def create_wastickers_zip(
     progress_callback=None,
     return_valid_results: bool = False,
 ) -> tuple[Path, int, dict] | tuple[list, dict]:
-    """Creates a WhatsApp sticker pack ZIP file in a temporary folder.
-    Returns: (zip_path, valid_count, stats_dict)
-    """
     logger.info("Starting ZIP creation for pack: %s", set_name)
-    
-    # Create main wasticker packs directory
     packs_dir = BASE_DIR / "wasticker_packs"
     packs_dir.mkdir(exist_ok=True)
-    
-    # Create working directory inside wasticker_packs
+
     import uuid
-    unique_id = uuid.uuid4().hex[:8]
-    work_dir = packs_dir / f"pack_{set_name}_{unique_id}"
+    work_dir = packs_dir / f"pack_{set_name}_{uuid.uuid4().hex[:8]}"
     work_dir.mkdir(exist_ok=True)
-    
+
     valid_count = 0
     valid_entries = []
     total = len(stickers)
-    emoji_map = {}  # Map sticker filename to emoji
+    emoji_map = {}
     stats = {
-        'skipped': 0,
-        'corrupt': 0,
-        'empty': 0,
-        'invalid': 0,
-        'warnings': 0,
-        'skipped_reasons': []
+        'skipped': 0, 'corrupt': 0, 'empty': 0,
+        'invalid': 0, 'warnings': 0, 'skipped_reasons': []
     }
-    
+
     try:
-        # Save tray icon
         tray_path = work_dir / "tray.png"
         with open(tray_path, 'wb') as f:
             f.write(tray_bytes.getvalue())
-        
-        # Save author and title
         (work_dir / "author.txt").write_text(author, encoding='utf-8')
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
-        logger.debug("Added tray icon, author.txt, and title.txt to folder.")
 
-        # Determine pack type ONCE before processing (not per-sticker)
         should_be_animated = any(s.is_animated or s.is_video for s in stickers)
         pack_type = "Animated" if should_be_animated else "Static"
-        logger.info(f"Pack type determined: {pack_type} ({sum(1 for s in stickers if s.is_animated)} TGS + {sum(1 for s in stickers if s.is_video)} video + {sum(1 for s in stickers if not (s.is_animated or s.is_video))} static)")
+        logger.info(f"Pack type determined: {pack_type}")
 
-        sem = asyncio.Semaphore(5)
+        # FIX: semaphore size reads from config
+        sem = asyncio.Semaphore(_cfg("max_concurrent"))
 
         async def process_one_sticker(i, sticker):
             async with sem:
                 try:
                     sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
-                    logger.debug(f"Downloaded sticker {i}.")
-
                     verification = await verify_sticker(
-                        sticker_data,
-                        sticker.is_animated,
-                        sticker.is_video,
-                        sticker.file_id,
+                        sticker_data, sticker.is_animated, sticker.is_video, sticker.file_id,
                     )
 
                     if not verification['valid']:
                         reason = verification['reason']
                         reason_lower = reason.lower()
-                        if 'corrupt' in reason_lower or 'invalid' in reason_lower:
-                            kind = 'corrupt'
-                        elif 'empty' in reason_lower or 'transparent' in reason_lower:
-                            kind = 'empty'
-                        else:
-                            kind = 'invalid'
-                        return {
-                            'index': i,
-                            'ok': False,
-                            'reason': reason,
-                            'kind': kind,
-                            'warnings': verification['warnings'],
-                        }
+                        kind = 'corrupt' if ('corrupt' in reason_lower or 'invalid' in reason_lower) else \
+                               'empty'  if ('empty'  in reason_lower or 'transparent' in reason_lower) else 'invalid'
+                        return {'index': i, 'ok': False, 'reason': reason, 'kind': kind, 'warnings': verification['warnings']}
 
                     if sticker.is_animated or sticker.is_video:
                         logger.info(f"Sticker {i}/{total}: Converting {'TGS' if sticker.is_animated else 'video'} to animated WebP")
@@ -1198,110 +1057,49 @@ async def create_wastickers_zip(
                             animated_out = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
                             converted_bytes = animated_out.getvalue()
                             if not _is_animated_webp_bytes(converted_bytes):
-                                # Fallback: wrap static output as a 2-frame animation
                                 logger.warning(f"Sticker {i}: animated conversion produced static output — wrapping as 1-frame animation")
                                 try:
                                     img = Image.open(BytesIO(converted_bytes))
                                     fallback_out = await _run_cpu_bound(convert_to_whatsapp_one_frame_animation, img)
                                     converted_bytes = fallback_out.getvalue()
                                 except Exception as fe:
-                                    return {
-                                        'index': i,
-                                        'ok': False,
-                                        'reason': f'conversion produced static and 1-frame fallback failed: {fe}',
-                                        'kind': 'invalid',
-                                        'warnings': verification['warnings'],
-                                    }
+                                    return {'index': i, 'ok': False, 'reason': f'conversion produced static and 1-frame fallback failed: {fe}', 'kind': 'invalid', 'warnings': verification['warnings']}
                         except Exception:
-                            return {
-                                'index': i,
-                                'ok': False,
-                                'reason': f"{'TGS' if sticker.is_animated else 'video'} conversion failed",
-                                'kind': 'invalid',
-                                'warnings': verification['warnings'],
-                            }
+                            return {'index': i, 'ok': False, 'reason': f"{'TGS' if sticker.is_animated else 'video'} conversion failed", 'kind': 'invalid', 'warnings': verification['warnings']}
+
                     elif should_be_animated:
-                        # Static sticker in a mixed pack — wrap as a 2-frame animation so it
-                        # satisfies WhatsApp's animated_sticker_pack requirement.
                         logger.info(f"Sticker {i}/{total}: static sticker in animated pack — converting to 1-frame animation")
                         try:
                             img = Image.open(BytesIO(sticker_data))
                             fallback_out = await _run_cpu_bound(convert_to_whatsapp_one_frame_animation, img)
                             converted_bytes = fallback_out.getvalue()
                         except Exception as fe:
-                            return {
-                                'index': i,
-                                'ok': False,
-                                'reason': f'static-to-animated fallback failed: {fe}',
-                                'kind': 'invalid',
-                                'warnings': verification['warnings'],
-                            }
+                            return {'index': i, 'ok': False, 'reason': f'static-to-animated fallback failed: {fe}', 'kind': 'invalid', 'warnings': verification['warnings']}
+
                     else:
                         try:
                             converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
                             converted_bytes = converted.getvalue()
                         except Exception:
-                            return {
-                                'index': i,
-                                'ok': False,
-                                'reason': 'static conversion failed',
-                                'kind': 'invalid',
-                                'warnings': verification['warnings'],
-                            }
+                            return {'index': i, 'ok': False, 'reason': 'static conversion failed', 'kind': 'invalid', 'warnings': verification['warnings']}
 
                     if should_be_animated and not _is_animated_webp_bytes(converted_bytes):
-                        return {
-                            'index': i,
-                            'ok': False,
-                            'reason': 'produced static WebP instead of animated',
-                            'kind': 'invalid',
-                            'warnings': verification['warnings'],
-                        }
+                        return {'index': i, 'ok': False, 'reason': 'produced static WebP instead of animated', 'kind': 'invalid', 'warnings': verification['warnings']}
 
                     if len(converted_bytes) > WA_MAX_BYTES:
-                        return {
-                            'index': i,
-                            'ok': False,
-                            'reason': f"oversized after conversion ({len(converted_bytes) // 1024}KB)",
-                            'kind': 'invalid',
-                            'warnings': verification['warnings'],
-                        }
+                        return {'index': i, 'ok': False, 'reason': f"oversized after conversion ({len(converted_bytes) // 1024}KB)", 'kind': 'invalid', 'warnings': verification['warnings']}
 
-                    is_valid, validation_reason = is_valid_webp_output(
-                        converted_bytes,
-                        require_animated=should_be_animated,
-                    )
+                    is_valid, validation_reason = is_valid_webp_output(converted_bytes, require_animated=should_be_animated)
                     if not is_valid:
-                        return {
-                            'index': i,
-                            'ok': False,
-                            'reason': validation_reason,
-                            'kind': 'invalid',
-                            'warnings': verification['warnings'],
-                        }
+                        return {'index': i, 'ok': False, 'reason': validation_reason, 'kind': 'invalid', 'warnings': verification['warnings']}
 
-                    # sticker.emojis is already a clean list (1-3 items) set when
-                    # the SimpleSticker was built.  Fall back to a smiley if empty.
                     emoji_list = sticker.emojis[:3] if sticker.emojis else ["\U0001F600"]
+                    return {'index': i, 'ok': True, 'bytes': converted_bytes, 'file_id': sticker.file_id, 'emoji_list': emoji_list, 'warnings': verification['warnings']}
 
-                    return {
-                        'index': i,
-                        'ok': True,
-                        'bytes': converted_bytes,
-                        'file_id': sticker.file_id,
-                        'emoji_list': emoji_list,
-                        'warnings': verification['warnings'],
-                    }
                 except Exception as e:
                     logger.error(f"Error processing sticker {i} in pack {set_name}: {e}")
                     logger.debug(traceback.format_exc())
-                    return {
-                        'index': i,
-                        'ok': False,
-                        'reason': 'unexpected processing error',
-                        'kind': 'invalid',
-                        'warnings': [],
-                    }
+                    return {'index': i, 'ok': False, 'reason': 'unexpected processing error', 'kind': 'invalid', 'warnings': []}
 
         tasks = [asyncio.create_task(process_one_sticker(i, sticker)) for i, sticker in enumerate(stickers, 1)]
         results = []
@@ -1323,12 +1121,9 @@ async def create_wastickers_zip(
                 stats['skipped'] += 1
                 stats['skipped_reasons'].append(f"Sticker {result['index']}: {result['reason']}")
                 kind = result.get('kind', 'invalid')
-                if kind == 'corrupt':
-                    stats['corrupt'] += 1
-                elif kind == 'empty':
-                    stats['empty'] += 1
-                else:
-                    stats['invalid'] += 1
+                if kind == 'corrupt':   stats['corrupt'] += 1
+                elif kind == 'empty':   stats['empty'] += 1
+                else:                   stats['invalid'] += 1
                 logger.warning(f"❌ Skipping sticker {result['index']}/{total}: {result['reason']}")
                 continue
 
@@ -1343,98 +1138,59 @@ async def create_wastickers_zip(
                 'bytes': result['bytes'],
                 'emoji_list': result['emoji_list'],
             })
-            logger.debug(f"Sticker {valid_count + 1} emojis: {result['emoji_list']}")
             valid_count += 1
 
         if return_valid_results:
             return valid_entries, stats
-    
+
         if valid_count == 0:
             raise ValueError("No valid stickers found in the pack.")
-        
         if valid_count < 3:
             raise ValueError(f"Pack has only {valid_count} stickers. WhatsApp requires minimum 3 stickers per pack.")
-        
         if valid_count > 30:
-            logger.info(f"Pack has {valid_count} stickers — the Android app will split into 30-sticker chunks when adding to WhatsApp.")
+            logger.info(f"Pack has {valid_count} stickers — the Android app will split into 30-sticker chunks.")
 
-        # Save emoji mapping to emojis.json
         emojis_json_path = work_dir / "emojis.json"
         with open(emojis_json_path, 'w', encoding='utf-8') as f:
             json.dump(emoji_map, f, ensure_ascii=False, indent=2)
-        logger.info(f"Saved emoji mappings for {len(emoji_map)} stickers")
 
-        # Create WhatsApp-compliant contents.json
         import uuid
-        pack_identifier = uuid.uuid4().hex[:16]  # 16-char unique ID
-        stickers_array = []
-        
-        # Build stickers array with emoji mappings
-        for sticker_file, emoji_list in emoji_map.items():
-            stickers_array.append({
-                "image_file": sticker_file,
-                "emojis": emoji_list if emoji_list else ["😊"]
-            })
-        
-        contents_json = _build_contents_json(
-            pack_identifier, title, author, emoji_map, should_be_animated
-        )
-        
+        pack_identifier = uuid.uuid4().hex[:16]
+        contents_json = _build_contents_json(pack_identifier, title, author, emoji_map, should_be_animated)
         contents_json_path = work_dir / "contents.json"
         with open(contents_json_path, 'w', encoding='utf-8') as f:
             json.dump(contents_json, f, ensure_ascii=False, indent=2)
-        logger.info(f"Created WhatsApp-compliant contents.json with {len(emoji_map)} stickers")
 
-        # Create ZIP from folder in wasticker_packs directory
         zip_path = packs_dir / f"{set_name}.wasticker"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for file_path in work_dir.iterdir():
                 zipf.write(file_path, file_path.name)
-        
+
         logger.info("ZIP creation finished for pack: %s with %d valid stickers.", set_name, valid_count)
-        logger.info(f"Stats: {stats['skipped']} skipped ({stats['corrupt']} corrupt, {stats['empty']} empty, {stats['invalid']} invalid), {stats['warnings']} warnings")
         return zip_path, valid_count, stats
-    
+
     finally:
-        # Clean up working directory on exit
         if work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)
 
-
 def _build_wasticker_zip_from_valid_entries(
-    set_name: str,
-    tray_bytes: BytesIO,
-    valid_entries: list,
-    title: str,
-    author: str,
-    animated_sticker_pack: bool,
+    set_name, tray_bytes, valid_entries, title, author, animated_sticker_pack
 ) -> Path:
-    """Build a .wasticker from already-converted valid entries."""
     packs_dir = BASE_DIR / "wasticker_packs"
     packs_dir.mkdir(exist_ok=True)
 
-    filtered_entries = []
-    for entry in valid_entries:
-        if len(entry['bytes']) > WA_MAX_BYTES:
-            logger.warning(
-                f"Skipping oversized sticker in final pack build: {len(entry['bytes']) // 1024}KB"
-            )
-            continue
-        filtered_entries.append(entry)
-
+    filtered_entries = [e for e in valid_entries if len(e['bytes']) <= WA_MAX_BYTES]
     if len(filtered_entries) < 3:
         raise ValueError("Pack has fewer than 3 valid stickers after size enforcement.")
 
     import uuid
-    unique_id = uuid.uuid4().hex[:8]
-    work_dir = packs_dir / f"pack_{set_name}_{unique_id}"
+    work_dir = packs_dir / f"pack_{set_name}_{uuid.uuid4().hex[:8]}"
     work_dir.mkdir(exist_ok=True)
 
     try:
         tray_path = work_dir / "tray.png"
         with open(tray_path, 'wb') as f:
             f.write(tray_bytes.getvalue())
-
         (work_dir / "author.txt").write_text(author, encoding='utf-8')
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
 
@@ -1451,10 +1207,7 @@ def _build_wasticker_zip_from_valid_entries(
             json.dump(emoji_map, f, ensure_ascii=False, indent=2)
 
         pack_identifier = uuid.uuid4().hex[:16]
-        contents_json = _build_contents_json(
-            pack_identifier, title, author, emoji_map, animated_sticker_pack
-        )
-
+        contents_json = _build_contents_json(pack_identifier, title, author, emoji_map, animated_sticker_pack)
         contents_json_path = work_dir / "contents.json"
         with open(contents_json_path, 'w', encoding='utf-8') as f:
             json.dump(contents_json, f, ensure_ascii=False, indent=2)
@@ -1468,71 +1221,32 @@ def _build_wasticker_zip_from_valid_entries(
         if work_dir.exists():
             shutil.rmtree(work_dir, ignore_errors=True)
 
-async def download_file_by_id(bot_token: str, file_id: str) -> bytes:
-    """Downloads a file from Telegram using bot token and file_id."""
-    session = await _get_http_session()
-
-    # Get file path
-    url = f"https://api.telegram.org/bot{bot_token}/getFile"
-    async with session.get(url, params={"file_id": file_id}) as resp:
-        data = await resp.json()
-        if not data["ok"]:
-            raise Exception(data["description"])
-        file_path = data["result"]["file_path"]
-
-    # Download file
-    _MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # 20 MB hard cap
-    download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-    async with session.get(download_url) as resp:
-        if resp.status != 200:
-            raise Exception(f"Failed to download file: HTTP {resp.status}")
-        content_length = resp.headers.get("Content-Length")
-        if content_length and int(content_length) > _MAX_DOWNLOAD_BYTES:
-            raise Exception(
-                f"File too large ({int(content_length) // 1024}KB), refusing download"
-            )
-        return await resp.read()
-
-async def get_sticker_set_via_bot_api(bot_token: str, name: str):
-    """Fetches sticker set information using Telegram Bot API."""
-    session = await _get_http_session()
-    url = f"https://api.telegram.org/bot{bot_token}/getStickerSet"
-    async with session.get(url, params={"name": name}) as resp:
-        data = await resp.json()
-        if not data["ok"]:
-            raise Exception(data["description"])
-        return data["result"]
+# ── Command handlers ──────────────────────────────────────────────────────────
 
 @app.on_message(filters.command("auth") & filters.private)
 async def authorize_chat(client: Client, message: Message):
-    """Authorizes a chat ID (only for bot owner in private chat). Usage: /auth <chat_id>"""
     if message.from_user.id != OWNER_ID:
         await message.reply_text("❌ Only the bot owner can use this command.")
         return
-    
     if len(message.command) < 2:
-        await message.reply_text("Usage: `/auth <chat_id>` (e.g., `/auth -1001234567890`)")
+        await message.reply_text("Usage: `/auth <chat_id>`")
         return
-    
     try:
         chat_id = int(message.command[1])
         AUTHORIZED_CHATS.add(chat_id)
         save_authorized_chats()
-        await message.reply_text(f"✅ Chat `{chat_id}` authorized. The bot can now freely work there (ensure permissions are granted).")
+        await message.reply_text(f"✅ Chat `{chat_id}` authorized.")
     except ValueError:
-        await message.reply_text("❌ Invalid chat ID. It should be a number (e.g., -1001234567890 for groups).")
+        await message.reply_text("❌ Invalid chat ID.")
 
 @app.on_message(filters.command("deauth") & filters.private)
 async def deauthorize_chat(client: Client, message: Message):
-    """Deauthorizes a chat ID (only for bot owner in private chat). Usage: /deauth <chat_id>"""
     if message.from_user.id != OWNER_ID:
         await message.reply_text("❌ Only the bot owner can use this command.")
         return
-    
     if len(message.command) < 2:
-        await message.reply_text("Usage: `/deauth <chat_id>` (e.g., `/deauth -1001234567890`)")
+        await message.reply_text("Usage: `/deauth <chat_id>`")
         return
-    
     try:
         chat_id = int(message.command[1])
         AUTHORIZED_CHATS.discard(chat_id)
@@ -1543,20 +1257,139 @@ async def deauthorize_chat(client: Client, message: Message):
 
 @app.on_message(filters.command("listauth") & filters.private)
 async def list_authorized_chats(client: Client, message: Message):
-    """Lists all authorized chat IDs (only for bot owner in private chat)."""
     if message.from_user.id != OWNER_ID:
         await message.reply_text("❌ Only the bot owner can use this command.")
         return
-    
     if not AUTHORIZED_CHATS:
         await message.reply_text("No authorized chats.")
     else:
-        chats_list = "\n".join(str(chat_id) for chat_id in sorted(AUTHORIZED_CHATS))
+        chats_list = "\n".join(str(c) for c in sorted(AUTHORIZED_CHATS))
         await message.reply_text(f"Authorized chats:\n`{chats_list}`")
+
+# ── /settings command ─────────────────────────────────────────────────────────
+# Owner-only. Lets you tune how many resources the bot uses during conversion.
+#
+# Settings:
+#   max_concurrent      — how many stickers are downloaded/converted in parallel
+#   process_pool_workers — how many CPU worker processes render TGS animations
+#   ffmpeg_threads      — how many threads ffmpeg uses to decode video stickers
+#   tgs_render_timeout  — seconds before a TGS render is aborted
+#
+# Each setting has a floor and ceiling to prevent the bot from thrashing or
+# deadlocking. Raising values speeds up conversion but uses more CPU/RAM.
+
+_SETTINGS_META = {
+    "max_concurrent": {
+        "label": "Parallel",
+        "desc": "Downloads/Conversions",
+        "min": 1, "max": 20, "step": 1, "unit": ""
+    },
+    "process_pool_workers": {
+        "label": "TGS Workers",
+        "desc": "Render Processes",
+        "min": 1, "max": 8, "step": 1, "unit": ""
+    },
+    "ffmpeg_threads": {
+        "label": "FFmpeg",
+        "desc": "Decode Threads",
+        "min": 1, "max": 16, "step": 1, "unit": ""
+    },
+    "tgs_render_timeout": {
+        "label": "Timeout",
+        "desc": "TGS Render",
+        "min": 10, "max": 300, "step": 10, "unit": "s"
+    },
+}
+
+def _settings_keyboard() -> InlineKeyboardMarkup:
+    rows = []
+    for key, meta in _SETTINGS_META.items():
+        val = _cfg(key)
+        unit = meta["unit"]
+        rows.append([
+            InlineKeyboardButton("➖", callback_data=f"cfg_dec_{key}"),
+            InlineKeyboardButton(f"{meta['label']}: {val}{unit}",
+                                callback_data=f"cfg_noop_{key}"),
+            InlineKeyboardButton("➕", callback_data=f"cfg_inc_{key}")
+        ])
+    rows.append([InlineKeyboardButton("Reset to defaults", callback_data="cfg_reset")])
+    return InlineKeyboardMarkup(rows)
+
+def _settings_text() -> str:
+    lines = ["**Resource settings**\n"]
+    for key, meta in _SETTINGS_META.items():
+        val = _cfg(key)
+        default = CONFIG_DEFAULTS[key]
+        unit = meta["unit"]
+        marker = "" if val == default else " ✏️"
+        lines.append(f"• {meta['label']}: `{val}{unit}`{marker}")
+    lines.append("\nUse the buttons below to tune up or down.")
+    lines.append("Higher values = faster conversion but more CPU/RAM.")
+    return "\n".join(lines)
+
+@app.on_message(filters.command("settings") & filters.private)
+async def settings_command(client: Client, message: Message):
+    if message.from_user.id != OWNER_ID:
+        await message.reply_text("❌ Only the bot owner can adjust settings.")
+        return
+    await message.reply_text(_settings_text(), reply_markup=_settings_keyboard())
+
+@app.on_callback_query(filters.regex(r"^cfg_(inc|dec|reset|noop)_?(.*)$"))
+async def settings_callback(client: Client, callback_query):
+    if callback_query.from_user.id != OWNER_ID:
+        await callback_query.answer("Not authorised.", show_alert=True)
+        return
+
+    action = callback_query.matches[0].group(1)
+    key    = callback_query.matches[0].group(2)
+
+    if action == "noop":
+        await callback_query.answer()
+        return
+
+    if action == "reset":
+        CONFIG.update(CONFIG_DEFAULTS)
+        _save_config(CONFIG)
+        _rebuild_process_pool(_cfg("process_pool_workers"))
+        await callback_query.answer("Reset to defaults.")
+        try:
+            await callback_query.message.edit_text(_settings_text(), reply_markup=_settings_keyboard())
+        except Exception:
+            pass
+        return
+
+    if key not in _SETTINGS_META:
+        await callback_query.answer("Unknown setting.", show_alert=True)
+        return
+
+    meta = _SETTINGS_META[key]
+    current = _cfg(key)
+    step = meta["step"]
+
+    if action == "inc":
+        new_val = min(current + step, meta["max"])
+    else:
+        new_val = max(current - step, meta["min"])
+
+    if new_val == current:
+        await callback_query.answer(f"Already at {'maximum' if action == 'inc' else 'minimum'}.")
+        return
+
+    CONFIG[key] = new_val
+    _save_config(CONFIG)
+
+    # If process pool workers changed, rebuild the pool immediately
+    if key == "process_pool_workers":
+        _rebuild_process_pool(new_val)
+
+    await callback_query.answer(f"{meta['label']} → {new_val}{meta['unit']}")
+    try:
+        await callback_query.message.edit_text(_settings_text(), reply_markup=_settings_keyboard())
+    except Exception:
+        pass
 
 @app.on_message(filters.command("start") & (filters.group | filters.private))
 async def start_command(client: Client, message: Message):
-    """Shows bot usage instructions."""
     instructions = """
 🤖 **Telegram to WhatsApp Sticker Converter**
 
@@ -1567,87 +1400,48 @@ async def start_command(client: Client, message: Message):
 • `/wast -z -c` - Download and ZIP raw stickers (no conversion)
 • `/loadsticker` - Reply to a sticker to import it to WhatsApp
 • `/loadsticker PackName` - Import to a named pack
+• `/converts` - Reply to a sticker to get the raw converted .webp file
 • `/local` - Process sticker files from a local 'stickers' folder
 • `/upload` - Upload all .wasticker files from current directory
 • `/help` - How to import stickers to WhatsApp
+• `/settings` - Tune CPU/RAM usage (owner only)
 • `/start` - Show this help message
-
-**How to use:**
-1. **Telegram Stickers:** Reply to any sticker with `/wast` to convert the whole pack
-   - Use `/wast MyCustomName` to give it a custom name
-   - Use `/wast -z` to create a simple ZIP with converted stickers
-   - Use `/wast -z -c` to download raw files without conversion
-2. **Upload Packs:** Use `/upload` to send all .wasticker files from current directory to Telegram
-3. **Load Single Sticker:** Reply to any sticker with `/loadsticker` to import it to WhatsApp
-   - First time creates a new pack, next times auto-add to the same pack
-   - Use `/loadsticker MyPack` for a custom pack name
-4. **Local Files:** Create a 'stickers' folder with .webm, .tgs, .png, .jpg, .jpeg, or .webp files, then use `/local`
-5. **ZIP Uploads:** Send a `.zip` file containing stickers directly to the bot.
-
-**Features:**
-✅ Converts static and animated stickers
-✅ Preserves transparency (animated stickers)
-✅ Automatic file size optimization
-✅ Immediate upload when ready
-✅ Progress tracking
-✅ Local file processing
-✅ Single-sticker import via /loadsticker
-
-**Requirements:**
-• Bot must be authorized in groups (owner only)
-• FFmpeg installed for animated stickers
-• 'stickers' folder for local processing
-
-**Owner Commands (Private only):**
-• `/auth <chat_id>` - Authorize a group
-• `/deauth <chat_id>` - Remove authorization
-• `/listauth` - List authorized groups
 """
     await message.reply_text(instructions)
 
 @app.on_message(filters.command("help") & (filters.group | filters.private))
 async def help_command(client: Client, message: Message):
-    """Shows how to import stickers to WhatsApp."""
     help_text = """
-**how to import stickers to whatsapp**
+**How to import stickers to WhatsApp**
 
-download the app using the button below
-click on the wasticker file
-tap "import to whatsapp"
+Download the app using the button below, tap the .wasticker file, then tap "Import to WhatsApp".
 
-if you're on ios, well fuck you and just tap the .wastickers file and pray to god.
+If you're on iOS, tap the .wasticker file and it should prompt you directly.
 """
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("download wasticker app (android)", url="https://play.google.com/store/apps/details?id=com.marsvard.stickermakerforwhatsapp")]
-    ])
-    
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "Download WA Sticker Maker (Android)",
+            url="https://play.google.com/store/apps/details?id=com.marsvard.stickermakerforwhatsapp"
+        )
+    ]])
     await message.reply_text(help_text, reply_markup=keyboard)
 
-@app.on_message(
-    filters.command("loadsticker") & (filters.group | filters.private)
-)
+@app.on_message(filters.command("loadsticker") & (filters.group | filters.private))
 async def loadsticker_command(client: Client, message: Message):
-    """Reply to a sticker to instantly convert it and send as a .wasticker file for import into WhatsApp."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
         await message.reply_text("❌ This chat is not authorized.")
         return
-
     if _is_rate_limited(message.from_user.id):
         await message.reply_text(f"⏳ Please wait {_RATE_LIMIT_SECONDS}s between commands.")
         return
 
-    # Must reply to a sticker
     replied = message.reply_to_message
     if not replied or not replied.sticker:
         await message.reply_text(
             "❌ Please reply to a sticker with `/loadsticker` to import it to WhatsApp.\n\n"
             "**Usage:**\n"
             "• `/loadsticker` — import to default pack (My Stickers)\n"
-            "• `/loadsticker MyPack` — import to a named pack\n\n"
-            "The sticker will be sent as a .idwasticker file.\n"
-            "Tap it to open in the Sticker Maker app — first time creates a new pack, "
-            "next times add to the same pack automatically!"
+            "• `/loadsticker MyPack` — import to a named pack"
         )
         return
 
@@ -1655,66 +1449,44 @@ async def loadsticker_command(client: Client, message: Message):
     sticker = replied.sticker
     is_animated = sticker.is_animated or sticker.is_video
     author_name = message.from_user.first_name or "Telegram User"
-
-    # Parse custom pack name
     args = message.command[1:] if len(message.command) > 1 else []
     pack_title = " ".join(args) if args else "My Stickers"
-
     msg = await message.reply_text("📥 Downloading sticker...")
 
     try:
-        # Download the sticker
         sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
-
         if not sticker_data or len(sticker_data) == 0:
             await msg.edit_text("❌ Failed to download sticker.")
             return
 
         await msg.edit_text("🔄 Converting to WhatsApp format...")
-
-        # Convert to WhatsApp-compatible WebP
         if is_animated:
-            is_tgs = sticker.is_animated
-            converted = await convert_to_whatsapp_animated(sticker_data, is_tgs)
+            converted = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
         else:
             converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
-
         converted_bytes = converted.getvalue()
 
-        # Create tray icon from the sticker
         tray_bytes = await _run_cpu_bound(optimize_tray_icon, converted_bytes, False)
-
         await msg.edit_text("📦 Packaging .wasticker file...")
 
-        # Build a single-sticker .wasticker ZIP in memory
         wasticker_bio = BytesIO()
         with zipfile.ZipFile(wasticker_bio, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.writestr('title.txt', pack_title)
             zipf.writestr('author.txt', author_name)
             zipf.writestr('tray.png', tray_bytes.getvalue())
             zipf.writestr('sticker_001.webp', converted_bytes)
-
         wasticker_bio.seek(0)
+
         wasticker_name = f"{sanitize_filename(pack_title)}.idwasticker"
-
         await msg.edit_text("Sending file...")
-
-        # Send the .idwasticker file
-        target_chat = message.chat.id
-        caption = (
-            f"**{pack_title}**\n"
-            f"sticker ready to import\n\n"
-        )
-
+        caption = f"**{pack_title}**\nsticker ready to import"
         await client.send_document(
-            chat_id=target_chat,
+            chat_id=message.chat.id,
             document=wasticker_bio,
             file_name=wasticker_name,
             caption=caption,
-            #reply_markup=build_open_app_keyboard(),
             disable_notification=True
         )
-
         await msg.delete()
 
     except Exception as e:
@@ -1722,88 +1494,53 @@ async def loadsticker_command(client: Client, message: Message):
         logger.error(traceback.format_exc())
         await msg.edit_text(f"Failed to load sticker: `{str(e)}`")
 
-@app.on_message(
-    filters.command("converts") & (filters.group | filters.private)
-)
+@app.on_message(filters.command("converts") & (filters.group | filters.private))
 async def converts_command(client: Client, message: Message):
-    """Reply to a sticker to convert it and send it as a regular .webp file for manual use."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
         await message.reply_text("❌ This chat is not authorized.")
         return
-
     if _is_rate_limited(message.from_user.id):
         await message.reply_text(f"⏳ Please wait {_RATE_LIMIT_SECONDS}s between commands.")
         return
 
-    # Must reply to a sticker
     replied = message.reply_to_message
     if not replied or not replied.sticker:
-        await message.reply_text(
-            "❌ Please reply to a sticker with `/converts` to get the raw converted file.\n"
-        )
+        await message.reply_text("❌ Please reply to a sticker with `/converts`.")
         return
 
     user_id = message.from_user.id
     sticker = replied.sticker
     is_animated = sticker.is_animated or sticker.is_video
-
     msg = await message.reply_text("📥 Downloading sticker for conversion...")
 
     try:
-        # Download the sticker
         sticker_data = await download_file_by_id(BOT_TOKEN, sticker.file_id)
-
         if not sticker_data or len(sticker_data) == 0:
             await msg.edit_text("❌ Failed to download sticker.")
             return
 
         await msg.edit_text("🔄 Converting sticker to WebP format...")
-
-        # Convert to WhatsApp-compatible WebP
         if is_animated:
-            is_tgs = sticker.is_animated
-            converted = await convert_to_whatsapp_animated(sticker_data, is_tgs)
+            converted = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
         else:
             converted = await _run_cpu_bound(_convert_static_bytes_to_webp, sticker_data)
-
         converted_bytes = converted.getvalue()
 
-        # Send the file
         await msg.edit_text("Sending file...")
-        
-        target_chat = message.chat.id
-        
         file_bio = BytesIO(converted_bytes)
         file_bio.name = "converted_sticker.webp"
-
         await client.send_document(
-            chat_id=target_chat,
+            chat_id=message.chat.id,
             document=file_bio,
             caption="Here is your converted sticker file.",
             disable_notification=True
         )
-
         await msg.delete()
 
     except Exception as e:
         logger.error(f"Converts failed for user {user_id}: {e}")
         logger.error(traceback.format_exc())
         await msg.edit_text(f"Failed to convert sticker: `{str(e)}`")
-
-active_sticker_sessions = {}
-
-# Per-user rate limiting: max 1 heavy command per _RATE_LIMIT_SECONDS seconds
-_user_last_command: dict[int, float] = {}
-_RATE_LIMIT_SECONDS = 10
-
-def _is_rate_limited(user_id: int) -> bool:
-    now = time.monotonic()
-    last = _user_last_command.get(user_id, 0)
-    if now - last < _RATE_LIMIT_SECONDS:
-        return True
-    _user_last_command[user_id] = now
-    return False
-
 
 async def process_stickers(
     client: Client,
@@ -1821,239 +1558,149 @@ async def process_stickers(
 ):
     try:
         set_name_sanitized = sanitize_filename(set_title)
-
         if not stickers:
             await msg.edit_text("No stickers provided.")
             return
 
-        # Use first sticker for tray icon (any type)
         first_sticker = stickers[0]
-        tray_file_id = first_sticker.file_id
-        tray_is_animated = first_sticker.is_animated or first_sticker.is_video
-        
-        tray_data = await download_file_by_id(BOT_TOKEN, tray_file_id)
-        optimized_tray_bytes = await _run_cpu_bound(optimize_tray_icon, tray_data, tray_is_animated)
+        tray_data = await download_file_by_id(BOT_TOKEN, first_sticker.file_id)
+        optimized_tray_bytes = await _run_cpu_bound(
+            optimize_tray_icon, tray_data, first_sticker.is_animated or first_sticker.is_video
+        )
 
-        # Handle simple ZIP mode (-z flag)
         if use_simple_zip:
             await msg.edit_text(f"Creating {'raw' if skip_conversion else 'converted'} ZIP with {len(stickers)} stickers...")
-            
-            # Progress callback
+
             _last_edit_simple = [0.0]
-            async def update_progress(current, total):
+            async def update_progress_simple(current, total):
                 now = time.monotonic()
                 if current != total and now - _last_edit_simple[0] < 4.0:
                     return
                 _last_edit_simple[0] = now
-
-                progress_bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
-                percentage = int(current / total * 100)
+                bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
                 action = "Downloading" if skip_conversion else "Converting"
-                progress_text = (
-                    f"{action} stickers\n\n"
-                    f"{progress_bar} {percentage}%\n"
-                    f"Sticker {current}/{total}"
-                )
                 try:
-                    await msg.edit_text(progress_text)
+                    await msg.edit_text(f"{action} stickers\n\n{bar} {int(current/total*100)}%\nSticker {current}/{total}")
                 except Exception:
                     pass
-            
+
             zip_path, valid_count = await create_simple_zip(
-                set_name_sanitized,
-                stickers,
-                convert=not skip_conversion,
-                progress_callback=update_progress
+                set_name_sanitized, stickers, convert=not skip_conversion,
+                progress_callback=update_progress_simple
             )
-            
-            # Upload the ZIP
             await msg.edit_text("Uploading ZIP file...")
-            
             mode_desc = "Raw stickers" if skip_conversion else "Converted stickers"
-            caption = f"{mode_desc}: {valid_count} files\n{set_title}"
-            
             await client.send_document(
                 chat_id=target_chat,
                 document=str(zip_path),
                 file_name=zip_path.name,
-                caption=caption,
+                caption=f"{mode_desc}: {valid_count} files\n{set_title}",
                 disable_notification=True
             )
-            
-            # Clean up just the zip we created
             try:
-                if zip_path.exists():
-                    zip_path.unlink()
-            except Exception as cleanup_error:
-                logger.warning(f"Cleanup error: {cleanup_error}")
-            
-            if send_to_private and target_chat == from_user_id:
-                try:
-                    await msg.reply_text("ZIP file sent to your private chat!")
-                except Exception:
-                    pass
-            else:
-                try:
-                    await msg.reply_text(f"Successfully zipped {valid_count} stickers!")
-                except Exception:
-                    pass
-            
+                zip_path.unlink(missing_ok=True)
+            except Exception as ce:
+                logger.warning(f"Cleanup error: {ce}")
+            try:
+                await msg.reply_text(f"Successfully zipped {valid_count} stickers!")
+            except Exception:
+                pass
             return
-        
-        # unified pack mode
+
+        # FIX: removed the vestigial types_to_process loop — process pack directly
         has_animated = any(s.is_animated or s.is_video for s in stickers)
         type_name = "Animated" if has_animated else "Static"
-
         await msg.edit_text(f"Processing {len(stickers)} stickers as {type_name} pack...")
 
-        types_to_process = [(type_name, stickers)]
-
-        zip_files_info = []
-        total_valid_stickers_count = 0
-
-        for type_name, type_stickers in types_to_process:
-            _last_edit_pack = [0.0]
-            async def update_progress(current, total):
-                now = time.monotonic()
-                if current != total and now - _last_edit_pack[0] < 4.0:
-                    return
-                _last_edit_pack[0] = now
-
-                progress_bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
-                percentage = int(current / total * 100)
-                progress_text = (
-                    f"Processing **{type_name}** stickers"
-                    f"\n\n{progress_bar} {percentage}%\n"
-                    f"Sticker {current}/{total}"
-                )
-                logger.info(f"Progress: {type_name} - {current}/{total} ({percentage}%)")
-                try:
-                    await msg.edit_text(progress_text)
-                except Exception:
-                    pass
-
-            type_letter = type_name[0].lower()
-            prep_name = f"{set_name_sanitized}_{type_letter}_prep"
-            valid_entries, stats = await create_wastickers_zip(
-                prep_name,
-                optimized_tray_bytes,
-                type_stickers,
-                set_title,
-                author=author_name,
-                progress_callback=update_progress,
-                return_valid_results=True,
-            )
-
-            valid_count_total = len(valid_entries)
-            total_valid_stickers_count += valid_count_total
-
-            if valid_count_total == 0:
-                raise ValueError("No valid stickers found in the pack.")
-
-            if valid_count_total < 3:
-                logger.warning(
-                    f"Pack '{type_name}' has only {valid_count_total} valid sticker(s) "
-                    f"— WhatsApp requires ≥3. Skipping this pack."
-                )
-                continue
-
-            # Send one .wasticker per type — the Android app splits into ≤30-sticker
-            # chunks automatically when the user taps "Add to WhatsApp".
-            internal_name = f"{set_name_sanitized}_{type_letter}"
-
-            zip_path = _build_wasticker_zip_from_valid_entries(
-                internal_name,
-                optimized_tray_bytes,
-                valid_entries,
-                set_title,
-                author_name,
-                has_animated,
-            )
-
-            caption = f"{type_name} Stickers: {valid_count_total} stickers"
-            if stats['skipped'] > 0:
-                caption += f"\nSkipped {stats['skipped']} invalid:"
-                if stats['corrupt'] > 0:
-                    caption += f" {stats['corrupt']} corrupt"
-                if stats['empty'] > 0:
-                    caption += f" {stats['empty']} empty"
-                if stats['invalid'] > 0:
-                    caption += f" {stats['invalid']} invalid"
-                if stats.get('skipped_reasons'):
-                    reason_counts = {}
-                    for entry in stats['skipped_reasons']:
-                        # entry format: "Sticker <n>: <reason>"
-                        reason = entry.split(': ', 1)[1] if ': ' in entry else entry
-                        reason_counts[reason] = reason_counts.get(reason, 0) + 1
-                    top_reasons = sorted(
-                        reason_counts.items(),
-                        key=lambda x: x[1],
-                        reverse=True,
-                    )[:3]
-                    if top_reasons:
-                        caption += "\nTop skip reasons:"
-                        for reason, count in top_reasons:
-                            caption += f"\n- {count}x {reason}"
-            if stats['warnings'] > 0:
-                caption += f"\n{stats['warnings']} warning(s) logged"
-            if valid_count_total > 30:
-                caption += f"\n\n📱 This pack has {valid_count_total} stickers. The app will split them into batches of 30 when you add to WhatsApp."
-
+        _last_edit_pack = [0.0]
+        async def update_progress_pack(current, total):
+            now = time.monotonic()
+            if current != total and now - _last_edit_pack[0] < 4.0:
+                return
+            _last_edit_pack[0] = now
+            bar = "█" * int(current / total * 20) + "░" * (20 - int(current / total * 20))
             try:
-                await msg.edit_text(f"Uploading {type_name} pack ({valid_count_total} stickers)...")
+                await msg.edit_text(
+                    f"Processing **{type_name}** stickers\n\n{bar} {int(current/total*100)}%\nSticker {current}/{total}"
+                )
             except Exception:
                 pass
 
-            while True:
-                try:
-                    await client.send_document(
-                        chat_id=target_chat,
-                        document=str(zip_path),
-                        file_name=zip_path.name,
-                        caption=caption,
-                        #reply_markup=build_open_app_keyboard(),
-                        disable_notification=True
-                    )
-                    break
-                except FloodWait as fw:
-                    logger.warning(f"FloodWait on send_document: waiting {fw.value}s")
-                    await asyncio.sleep(fw.value)
+        type_letter = type_name[0].lower()
+        prep_name = f"{set_name_sanitized}_{type_letter}_prep"
+        valid_entries, stats = await create_wastickers_zip(
+            prep_name, optimized_tray_bytes, stickers, set_title,
+            author=author_name, progress_callback=update_progress_pack,
+            return_valid_results=True,
+        )
 
-            zip_files_info.append((zip_path, internal_name))
-            await asyncio.sleep(1)
+        valid_count_total = len(valid_entries)
+        if valid_count_total == 0:
+            raise ValueError("No valid stickers found in the pack.")
+        if valid_count_total < 3:
+            logger.warning(f"Pack has only {valid_count_total} valid sticker(s) — WhatsApp requires ≥3. Skipping.")
+            await msg.edit_text(f"❌ Only {valid_count_total} valid sticker(s) — WhatsApp requires at least 3.")
+            return
 
+        internal_name = f"{set_name_sanitized}_{type_letter}"
+        zip_path = _build_wasticker_zip_from_valid_entries(
+            internal_name, optimized_tray_bytes, valid_entries, set_title, author_name, has_animated,
+        )
+
+        caption = f"{type_name} Stickers: {valid_count_total} stickers"
+        if stats['skipped'] > 0:
+            caption += f"\nSkipped {stats['skipped']} invalid"
+            if stats.get('skipped_reasons'):
+                reason_counts = {}
+                for entry in stats['skipped_reasons']:
+                    reason = entry.split(': ', 1)[1] if ': ' in entry else entry
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+                top_reasons = sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+                if top_reasons:
+                    caption += "\nTop skip reasons:"
+                    for reason, count in top_reasons:
+                        caption += f"\n- {count}x {reason}"
+        if valid_count_total > 30:
+            caption += f"\n\n📱 {valid_count_total} stickers — app will split into batches of 30 when added to WhatsApp."
 
         try:
-            for zp, _ in zip_files_info:
-                if zp.exists():
-                    zp.unlink()
-        except Exception as cleanup_error:
-            logger.warning(f"Cleanup error: {cleanup_error}")
+            await msg.edit_text(f"Uploading {type_name} pack ({valid_count_total} stickers)...")
+        except Exception:
+            pass
 
-        if send_to_private and target_chat == from_user_id:
+        while True:
             try:
-                await msg.reply_text(
-                    "📩 All sticker packs have been sent to your private chat!"
+                await client.send_document(
+                    chat_id=target_chat,
+                    document=str(zip_path),
+                    file_name=zip_path.name,
+                    caption=caption,
+                    disable_notification=True
                 )
-            except Exception:
-                pass
-        else:
-            try:
-                await msg.reply_text(
-                    f"✅ Successfully sent {total_valid_stickers_count} stickers!"
-                )
-            except Exception:
-                pass
+                break
+            except FloodWait as fw:
+                logger.warning(f"FloodWait on send_document: waiting {fw.value}s")
+                await asyncio.sleep(fw.value)
+
+        try:
+            zip_path.unlink(missing_ok=True)
+        except Exception as ce:
+            logger.warning(f"Cleanup error: {ce}")
+
+        try:
+            await msg.reply_text(f"✅ Successfully sent {valid_count_total} stickers!")
+        except Exception:
+            pass
 
     except FloodWait as e:
-        logger.warning(f"FloodWait in chat {target_chat} for pack {pack_name}: waiting {e.value}s")
+        logger.warning(f"FloodWait for pack {pack_name}: waiting {e.value}s")
         await asyncio.sleep(e.value)
         try:
             await msg.edit_text("⏳ Rate limit hit. Please try again in a moment.")
         except Exception:
             pass
     except Exception as e:
-        logger.error(f"Pack conversion failed in chat {target_chat} for pack {pack_name}: {e}")
+        logger.error(f"Pack conversion failed for pack {pack_name}: {e}")
         logger.error(traceback.format_exc())
         error_message = str(e).lower()
         if "bot was kicked" in error_message:
@@ -2065,54 +1712,37 @@ async def process_stickers(
         else:
             await msg.edit_text(f"An unexpected error occurred: `{str(e)}`")
 
-@app.on_message(
-    filters.command("wast") & (filters.group | filters.private)
-)
+@app.on_message(filters.command("wast") & (filters.group | filters.private))
 async def convert_pack(client: Client, message: Message):
-    """Converts a Telegram sticker pack to WhatsApp compatible ZIP files."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
         await message.reply_text("This chat is not authorized. Contact the bot owner to authorize it with `/auth <chat_id>` in private.")
         return
-
     if _is_rate_limited(message.from_user.id):
         await message.reply_text(f"⏳ Please wait {_RATE_LIMIT_SECONDS}s between commands.")
         return
 
-    # Parse flags and custom name
     args = message.command[1:] if len(message.command) > 1 else []
-    flags = [arg for arg in args if arg.startswith('-')]
-    name_parts = [arg for arg in args if not arg.startswith('-')]
-    
-    use_simple_zip = '-z' in flags
+    flags = [a for a in args if a.startswith('-')]
+    name_parts = [a for a in args if not a.startswith('-')]
+
+    use_simple_zip  = '-z' in flags
     skip_conversion = '-c' in flags
     is_session_mode = '-s' in flags
-    
     custom_name = " ".join(name_parts) if name_parts else None
-    
-    # Validate flag combination
+
     if skip_conversion and not use_simple_zip:
-        await message.reply_text("Flag `-c` (no conversion) requires `-z` flag.\nUsage: `/wast -z -c` or `/wast -z`")
+        await message.reply_text("Flag `-c` (no conversion) requires `-z` flag.\nUsage: `/wast -z -c`")
         return
 
     if is_session_mode:
         session_key = (message.chat.id, message.from_user.id)
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Make Sticker Pack", callback_data="make_pack")]
-        ])
-        
-        mode_text = ""
-        if use_simple_zip and skip_conversion:
-            mode_text = " (Raw ZIP mode)"
-        elif use_simple_zip:
-            mode_text = " (Converted ZIP mode)"
-            
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Make Sticker Pack", callback_data="make_pack")]])
+        mode_text = " (Raw ZIP)" if (use_simple_zip and skip_conversion) else " (Converted ZIP)" if use_simple_zip else ""
         name_text = f" as **{custom_name}**" if custom_name else ""
-            
         msg = await message.reply_text(
             f"⏳ Send stickers one by one to create a pack{name_text}{mode_text}.\n\nStickers added: 0",
             reply_markup=keyboard
         )
-        
         active_sticker_sessions[session_key] = {
             "message_id": msg.id,
             "chat_id": message.chat.id,
@@ -2127,73 +1757,45 @@ async def convert_pack(client: Client, message: Message):
         return
 
     replied = message.reply_to_message
-
     if not replied or not replied.sticker:
         await message.reply_text("❌ Please reply to a sticker with `/wast` or use `/wast -s` to select multiple stickers.")
         return
-
     if not replied.sticker.set_name:
         await message.reply_text("❌ This sticker doesn't belong to a pack.")
         return
 
     pack_name = replied.sticker.set_name
-    
-    mode_text = ""
-    if use_simple_zip and skip_conversion:
-        mode_text = " (Raw ZIP mode)"
-    elif use_simple_zip:
-        mode_text = " (Converted ZIP mode)"
-    
+    mode_text = " (Raw ZIP)" if (use_simple_zip and skip_conversion) else " (Converted ZIP)" if use_simple_zip else ""
     msg = await message.reply_text(f"📦 Processing pack: **{pack_name}**{mode_text}...")
 
     try:
         sticker_set = await get_sticker_set_via_bot_api(BOT_TOKEN, pack_name)
         set_title = custom_name if custom_name else sticker_set["title"]
-
-        # Fetch multi-emoji map via MTProto (up to 3 emojis per sticker).
-        # The Bot-API only exposes a single emoji per sticker; the MTProto
-        # 'packs' field contains the full emoji-to-sticker mapping which we
-        # invert here.  Falls back to an empty dict on any error.
         emoji_index_map = await fetch_pack_emoji_map(pack_name)
 
-        # Create sticker list and deduplicate by file_id
         seen_ids = set()
         stickers = []
         for idx, s in enumerate(sticker_set["stickers"]):
             fid = s["file_id"]
             if fid not in seen_ids:
                 seen_ids.add(fid)
-                # Prefer the MTProto multi-emoji list; fall back to the single
-                # emoji from the Bot API when MTProto data is unavailable.
                 emojis = emoji_index_map.get(idx) or [s.get("emoji", "\U0001F600")]
-                stickers.append(SimpleSticker(
-                    fid,
-                    s.get("is_animated", False),
-                    s.get("is_video", False),
-                    emojis
-                ))
+                stickers.append(SimpleSticker(fid, s.get("is_animated", False), s.get("is_video", False), emojis))
 
         if len(seen_ids) < len(sticker_set["stickers"]):
-            logger.warning(f"Removed {len(sticker_set['stickers']) - len(seen_ids)} duplicate stickers from pack")
-        
+            logger.warning(f"Removed {len(sticker_set['stickers']) - len(seen_ids)} duplicate stickers")
+
         send_to_private = "private" in message.text.lower() if message.text else False
         target_chat = message.from_user.id if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] else message.chat.id
 
         await process_stickers(
-            client=client,
-            msg=msg,
-            message_text=message.text,
-            target_chat=target_chat,
-            set_title=set_title,
-            stickers=stickers,
-            use_simple_zip=use_simple_zip,
-            skip_conversion=skip_conversion,
+            client=client, msg=msg, message_text=message.text,
+            target_chat=target_chat, set_title=set_title, stickers=stickers,
+            use_simple_zip=use_simple_zip, skip_conversion=skip_conversion,
             author_name=message.from_user.first_name or "Telegram User",
-            pack_name=pack_name,
-            send_to_private=send_to_private,
+            pack_name=pack_name, send_to_private=send_to_private,
             from_user_id=message.from_user.id
         )
-
     finally:
         try:
             await msg.delete()
@@ -2203,44 +1805,30 @@ async def convert_pack(client: Client, message: Message):
 @app.on_message(filters.sticker & (filters.group | filters.private))
 async def handle_individual_stickers(client: Client, message: Message):
     session_key = (message.chat.id, message.from_user.id)
-    # Expire sessions older than 1 hour to prevent unbounded memory growth
-    _SESSION_TTL = 3600
-    if session_key in active_sticker_sessions:
-        if time.monotonic() - active_sticker_sessions[session_key].get("created_at", 0) > _SESSION_TTL:
-            active_sticker_sessions.pop(session_key, None)
-            return
-        session = active_sticker_sessions[session_key]
-        
-        session["stickers"].append(SimpleSticker(
-            message.sticker.file_id,
-            message.sticker.is_animated,
-            message.sticker.is_video,
-            # pyrogram Message.sticker only exposes a single emoji; wrap in list
-            # so SimpleSticker's emojis field stays consistent.
-            [message.sticker.emoji or "\U0001F600"]
-        ))
-        
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Make Sticker Pack", callback_data="make_pack")]
-        ])
-        
-        try:
-            await client.edit_message_text(
-                chat_id=session["chat_id"],
-                message_id=session["message_id"],
-                text=f"⏳ Send stickers one by one.\n\nStickers added: {len(session['stickers'])}",
-                reply_markup=keyboard
-            )
-        except Exception:
-            pass
-        
-        try:
-            # Optionally delete the user's sticker message to keep chat clean. 
-            # Commenting out for now, to keep behavior transparent
-            # await message.delete()
-            pass
-        except Exception:
-            pass
+    if session_key not in active_sticker_sessions:
+        return
+    # Inline TTL check (background task handles bulk pruning)
+    if time.monotonic() - active_sticker_sessions[session_key].get("created_at", 0) > _SESSION_TTL:
+        active_sticker_sessions.pop(session_key, None)
+        return
+
+    session = active_sticker_sessions[session_key]
+    session["stickers"].append(SimpleSticker(
+        message.sticker.file_id,
+        message.sticker.is_animated,
+        message.sticker.is_video,
+        [message.sticker.emoji or "\U0001F600"]
+    ))
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Make Sticker Pack", callback_data="make_pack")]])
+    try:
+        await client.edit_message_text(
+            chat_id=session["chat_id"],
+            message_id=session["message_id"],
+            text=f"⏳ Send stickers one by one.\n\nStickers added: {len(session['stickers'])}",
+            reply_markup=keyboard
+        )
+    except Exception:
+        pass
 
 @app.on_callback_query(filters.regex("^make_pack$"))
 async def make_pack_callback(client: Client, callback_query):
@@ -2248,39 +1836,32 @@ async def make_pack_callback(client: Client, callback_query):
     if session_key not in active_sticker_sessions:
         await callback_query.answer("No active session or you didn't start it.", show_alert=True)
         return
-    
+
     session = active_sticker_sessions.pop(session_key)
     stickers_list = session["stickers"]
-    
     if not stickers_list:
         await callback_query.answer("No stickers added!", show_alert=True)
         return
-        
+
     await callback_query.answer("Processing stickers...")
-    
     msg = callback_query.message
     await msg.edit_text("📦 Processing your custom sticker pack...", reply_markup=None)
-    
+
     message_text = session["source_message_text"]
     from_user = session["from_user"]
     send_to_private = message_text and "private" in message_text.lower()
     target_chat = from_user.id if send_to_private and msg.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] else msg.chat.id
-    
     set_title = session["custom_name"] or "Random Stickers"
 
     try:
         await process_stickers(
-            client=client,
-            msg=msg,
-            message_text=message_text,
-            target_chat=target_chat,
-            set_title=set_title,
+            client=client, msg=msg, message_text=message_text,
+            target_chat=target_chat, set_title=set_title,
             stickers=stickers_list,
             use_simple_zip=session["use_simple_zip"],
             skip_conversion=session["skip_conversion"],
             author_name=from_user.first_name or "Telegram User",
-            pack_name=set_title,
-            send_to_private=send_to_private,
+            pack_name=set_title, send_to_private=send_to_private,
             from_user_id=from_user.id
         )
     finally:
@@ -2291,25 +1872,21 @@ async def make_pack_callback(client: Client, callback_query):
 
 @app.on_message(filters.command("upload") & (filters.group | filters.private))
 async def upload_wasticker_files(client: Client, message: Message):
-    """Uploads all .wasticker files from the wasticker_packs directory to Telegram."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
-        await message.reply_text("❌ This chat is not authorized. Contact the bot owner to authorize it with `/auth <chat_id>` in private.")
+        await message.reply_text("❌ This chat is not authorized.")
         return
 
-    # Find all .wasticker files in wasticker_packs directory
     packs_dir = Path("wasticker_packs")
     if not packs_dir.exists():
         await message.reply_text("❌ No wasticker_packs folder found. Process some stickers first with `/wast`.")
         return
-    
+
     wasticker_files = list(packs_dir.glob("*.wasticker"))
-    
     if not wasticker_files:
         await message.reply_text("❌ No .wasticker files found in the wasticker_packs folder.")
         return
 
     msg = await message.reply_text(f"📤 Found {len(wasticker_files)} .wasticker file(s). Uploading...")
-
     send_to_private = "private" in message.text.lower()
     target_chat = message.from_user.id if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] else message.chat.id
 
@@ -2317,7 +1894,6 @@ async def upload_wasticker_files(client: Client, message: Message):
     for i, wasticker_file in enumerate(wasticker_files, 1):
         try:
             await msg.edit_text(f"📤 Uploading {i}/{len(wasticker_files)}: {wasticker_file.name}")
-            
             await client.send_document(
                 chat_id=target_chat,
                 document=str(wasticker_file),
@@ -2326,31 +1902,23 @@ async def upload_wasticker_files(client: Client, message: Message):
                 disable_notification=True
             )
             uploaded_count += 1
-            await asyncio.sleep(1)  # Rate limiting
-            
+            await asyncio.sleep(1)
         except Exception as e:
             logger.error(f"Failed to upload {wasticker_file.name}: {e}")
             continue
 
-    # Clean up wasticker_packs folder after successful upload
     cleanup_success = False
     try:
         if packs_dir.exists():
             shutil.rmtree(packs_dir, ignore_errors=True)
             cleanup_success = True
-            logger.info("Cleaned up wasticker_packs folder after upload.")
-    except Exception as cleanup_error:
-        logger.warning(f"Cleanup error: {cleanup_error}")
-    
+    except Exception as ce:
+        logger.warning(f"Cleanup error: {ce}")
+
     success_msg = f"✅ Uploaded {uploaded_count}/{len(wasticker_files)} sticker packs!"
     if cleanup_success:
         success_msg += "\n🗑️ Cleaned up temporary files."
-    
-    if send_to_private and target_chat == message.from_user.id:
-        await message.reply_text(success_msg + "\n(Sent to private chat)")
-    else:
-        await message.reply_text(success_msg)
-    
+    await message.reply_text(success_msg)
     try:
         await msg.delete()
     except Exception:
@@ -2358,30 +1926,27 @@ async def upload_wasticker_files(client: Client, message: Message):
 
 @app.on_message(filters.command("local") & (filters.group | filters.private))
 async def process_local_folder(client: Client, message: Message):
-    """Processes local sticker files from a 'stickers' folder in current directory."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
-        await message.reply_text("❌ This chat is not authorized. Contact the bot owner to authorize it with `/auth <chat_id>` in private.")
+        await message.reply_text("❌ This chat is not authorized.")
         return
 
     stickers_dir = Path("stickers")
     if not stickers_dir.exists():
-        await message.reply_text("❌ No 'stickers' folder found in current directory. Create a 'stickers' folder and put your .webm/.tgs files there.")
+        await message.reply_text("❌ No 'stickers' folder found. Create one and put .webm/.tgs/.png/.jpg/.webp files there.")
         return
 
-    # Find all sticker files
     sticker_files = []
     for ext in ['*.webm', '*.tgs', '*.png', '*.jpg', '*.jpeg', '*.webp']:
         sticker_files.extend(stickers_dir.glob(ext))
 
     if not sticker_files:
-        await message.reply_text("❌ No sticker files found in 'stickers' folder. Supported formats: .webm, .tgs, .png, .jpg, .jpeg, .webp")
+        await message.reply_text("❌ No sticker files found. Supported: .webm .tgs .png .jpg .jpeg .webp")
         return
 
     msg = await message.reply_text(f"📦 Processing {len(sticker_files)} local sticker files...")
 
     try:
         static_files, animated_files = classify_sticker_files(sticker_files)
-
         types_to_process = []
         if static_files:
             types_to_process.append(("Static", static_files))
@@ -2390,17 +1955,15 @@ async def process_local_folder(client: Client, message: Message):
 
         total_processed = 0
         zip_paths = []
-        _local_sem = asyncio.Semaphore(5)
+        _local_sem = asyncio.Semaphore(_cfg("max_concurrent"))
 
         for type_name, files in types_to_process:
             chunks = split_into_chunks(files, 30)
             num_parts = len(chunks)
-            
             for part_num, chunk in enumerate(chunks, 1):
                 type_letter = type_name[0].lower()
                 processing_dir = Path(f"processed_{type_letter}_{part_num}")
                 processing_dir.mkdir(exist_ok=True)
-                
                 processed_count = 0
 
                 async def _convert_local_file(sf, _sem=_local_sem):
@@ -2433,13 +1996,11 @@ async def process_local_folder(client: Client, message: Message):
                         with open(processing_dir / output_name, 'wb') as fh:
                             fh.write(data)
                         processed_count += 1
-                        logger.info(f"Processed {sf.name}")
 
                 if processed_count == 0:
                     shutil.rmtree(processing_dir, ignore_errors=True)
                     continue
 
-                # Create tray icon
                 tray_path = processing_dir / "tray.png"
                 try:
                     first_file = chunk[0]
@@ -2452,29 +2013,24 @@ async def process_local_folder(client: Client, message: Message):
                 except Exception as e:
                     logger.warning(f"Could not create tray icon: {e}")
 
-                # Create ZIP file
                 part_title = f"Converted {type_name}" + (f" Part {part_num}" if num_parts > 1 else "")
                 zip_name = f"whatsapp_{type_name.lower()}_{part_num}.wastickers"
                 zip_path = Path(zip_name)
                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                     if tray_path.exists():
                         zipf.write(tray_path, 'tray.png')
-
                     author_name = message.from_user.first_name or "Telegram User"
                     zipf.writestr('author.txt', author_name.encode('utf-8'))
                     zipf.writestr('title.txt', part_title.encode('utf-8'))
-
                     for webp_file in processing_dir.glob("*.webp"):
                         zipf.write(webp_file, f"sticker_{webp_file.stem[-8:]}.webp")
 
                 zip_paths.append(zip_name)
                 total_processed += processed_count
-
-                # Clean up processing dir
                 shutil.rmtree(processing_dir, ignore_errors=True)
 
         if total_processed > 0:
-            await msg.edit_text(f"✅ Processed {total_processed} stickers! ZIP files created: {', '.join(zip_paths)}")
+            await msg.edit_text(f"✅ Processed {total_processed} stickers! ZIP files: {', '.join(zip_paths)}")
         else:
             await msg.edit_text("❌ Failed to process any stickers.")
 
@@ -2489,11 +2045,9 @@ async def process_local_folder(client: Client, message: Message):
 
 @app.on_message(filters.document & (filters.group | filters.private))
 async def process_zip_upload(client: Client, message: Message):
-    """Processes an uploaded ZIP file containing stickers."""
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP] and message.chat.id not in AUTHORIZED_CHATS:
-        await message.reply_text("❌ This chat is not authorized. Contact the bot owner to authorize it with `/auth <chat_id>` in private.")
+        await message.reply_text("❌ This chat is not authorized.")
         return
-
     if not message.document.file_name or not message.document.file_name.lower().endswith('.zip'):
         return
 
@@ -2502,65 +2056,59 @@ async def process_zip_upload(client: Client, message: Message):
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
-            
-            # Download file
             zip_path = await message.download(file_name=str(tmp_path / message.document.file_name))
-            
+
             await msg.edit_text("📦 Extracting ZIP file...")
-            
             extract_dir = tmp_path / "extracted"
             extract_dir.mkdir()
-            
+
+            # FIX: extract member-by-member (not extractall) to properly enforce Zip Slip guard.
+            # The original code validated all members then called extractall() — a TOCTOU gap
+            # where a symlink bomb could bypass the check. We now extract each entry individually
+            # immediately after validating it.
+            extract_dir_resolved = extract_dir.resolve()
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                # Guard against Zip Slip: reject any entry whose resolved path escapes extract_dir
-                extract_dir_resolved = extract_dir.resolve()
                 for member in zip_ref.infolist():
                     member_path = (extract_dir_resolved / member.filename).resolve()
-                    if not str(member_path).startswith(str(extract_dir_resolved) + os.sep) and member_path != extract_dir_resolved:
-                        raise ValueError(f"Zip Slip detected: refusing to extract '{member.filename}'")
-                zip_ref.extractall(extract_dir)
-            
-            # Find all sticker files
+                    if not str(member_path).startswith(str(extract_dir_resolved) + os.sep):
+                        logger.warning(f"Zip Slip blocked: '{member.filename}'")
+                        continue
+                    zip_ref.extract(member, extract_dir)
+
             sticker_files = []
             for ext in ['*.webm', '*.tgs', '*.png', '*.jpg', '*.jpeg', '*.webp']:
                 sticker_files.extend(extract_dir.rglob(ext))
 
             if not sticker_files:
-                await msg.edit_text("❌ No supported sticker files found in the ZIP. Supported formats: .webm, .tgs, .png, .jpg, .jpeg, .webp")
+                await msg.edit_text("❌ No supported sticker files found in the ZIP.")
                 return
 
             static_files, animated_files = classify_sticker_files(sticker_files)
-
             types_to_process = []
             if static_files:
                 types_to_process.append(("Static", static_files))
             if animated_files:
                 types_to_process.append(("Animated", animated_files))
 
-            pack_name_base = message.document.file_name[:-4]  # remove .zip
+            pack_name_base = message.document.file_name[:-4]
             author_name = message.from_user.first_name or "Telegram User"
             total_packs_sent = 0
-            # Initialise here so the post-loop check is never unbound
-            # even when types_to_process is empty or no iterations complete.
             send_to_private = bool(message.caption and "private" in message.caption.lower())
             target_chat = (
-                message.from_user.id
-                if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
+                message.from_user.id if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
                 else message.chat.id
             )
-            _zip_sem = asyncio.Semaphore(5)
+            _zip_sem = asyncio.Semaphore(_cfg("max_concurrent"))
 
             for type_name, files in types_to_process:
                 chunks = split_into_chunks(files, 30)
                 num_parts = len(chunks)
-                
+
                 for part_num, chunk in enumerate(chunks, 1):
                     type_letter = type_name[0].lower()
                     part_title = pack_name_base + (f" - Part {part_num}" if num_parts > 1 else "")
-                    
                     processing_dir = tmp_path / f"processed_{type_letter}_{part_num}"
                     processing_dir.mkdir()
-
                     processed_count = 0
 
                     async def _convert_zip_file(sf, _sem=_zip_sem):
@@ -2597,7 +2145,6 @@ async def process_zip_upload(client: Client, message: Message):
                     if processed_count == 0:
                         continue
 
-                    # Tray icon
                     tray_path = processing_dir / "tray.png"
                     try:
                         first_file = chunk[0]
@@ -2610,29 +2157,17 @@ async def process_zip_upload(client: Client, message: Message):
                     except Exception as e:
                         logger.warning(f"Could not create tray icon: {e}")
 
-                    # ZIP up to .wasticker
                     wasticker_name = f"{sanitize_filename(part_title)}.wasticker"
                     wasticker_path = tmp_path / wasticker_name
-
                     with zipfile.ZipFile(wasticker_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                         if tray_path.exists():
                             zipf.write(tray_path, 'tray.png')
-
                         zipf.writestr('author.txt', author_name.encode('utf-8'))
                         zipf.writestr('title.txt', part_title.encode('utf-8'))
-
                         for webp_file in processing_dir.glob("*.webp"):
                             zipf.write(webp_file, f"sticker_{webp_file.stem[-8:]}.webp")
 
                     await msg.edit_text(f"📤 Uploading {type_name} sticker pack...")
-
-                    send_to_private = bool(message.caption and "private" in message.caption.lower())
-                    target_chat = (
-                        message.from_user.id
-                        if send_to_private and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]
-                        else message.chat.id
-                    )
-
                     part_suffix = f" (Part {part_num}/{num_parts})" if num_parts > 1 else ""
                     caption = f"✅ {type_name} Stickers{part_suffix}\nProcessed {processed_count} stickers from {message.document.file_name}"
 
@@ -2645,19 +2180,13 @@ async def process_zip_upload(client: Client, message: Message):
                     )
                     total_packs_sent += 1
 
-            if send_to_private and target_chat == message.from_user.id:
-                try:
-                    await message.reply_text("📩 ZIP processing complete. Packs sent to your private chat!")
-                except Exception:
-                    pass
+            if total_packs_sent == 0:
+                await msg.edit_text("❌ Failed to process any sticker packs from the ZIP.")
             else:
                 try:
                     await msg.delete()
                 except Exception:
                     pass
-
-            if total_packs_sent == 0:
-                await msg.reply_text("❌ Failed to process any sticker packs from the ZIP.")
 
     except Exception as e:
         logger.error(f"ZIP processing failed: {e}")
@@ -2666,6 +2195,7 @@ async def process_zip_upload(client: Client, message: Message):
         except Exception:
             pass
 
+# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import atexit
 
@@ -2688,6 +2218,13 @@ if __name__ == "__main__":
 
     atexit.register(_shutdown)
 
-    logger.info("Starting Sticker Pack Bot...")
-    logger.info(f"Loaded {len(AUTHORIZED_CHATS)} authorized chats.")
-    app.run()
+    async def _main():
+        # Start background cleanup tasks before running the bot
+        asyncio.create_task(_session_cleanup_loop())
+        await app.start()
+        logger.info("Starting Sticker Pack Bot...")
+        logger.info(f"Loaded {len(AUTHORIZED_CHATS)} authorized chats.")
+        logger.info(f"Config: {CONFIG}")
+        await asyncio.Event().wait()
+
+    app.run(_main())
