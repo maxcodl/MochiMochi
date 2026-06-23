@@ -449,14 +449,29 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         resultsContainer.removeAllViews();
         resultsSection.setVisibility(View.VISIBLE);
 
+        int totalSkippedAnimated = 0;
         for (ConversionTaskManager.TaskPackResult r : task.results) {
+            totalSkippedAnimated += r.skippedAnimatedCount;
+        }
+
+        // Add a result card for each real pack (non-empty identifier)
+        for (ConversionTaskManager.TaskPackResult r : task.results) {
+            if (r.identifier == null || r.identifier.isEmpty()) continue; // animated-only placeholder
             TelegramConverter.ImportedPackResult converted = new TelegramConverter.ImportedPackResult(
                     r.identifier,
                     r.name,
                     r.stickerCount,
-                    r.isAnimated
+                    r.isAnimated,
+                    r.skippedAnimatedCount
             );
             addResultCard(converted);
+        }
+
+        // Show the animated-not-supported banner if any stickers were skipped
+        if (totalSkippedAnimated > 0) {
+            boolean allAnimated = task.results.stream()
+                    .allMatch(r -> r.identifier == null || r.identifier.isEmpty());
+            resultsContainer.addView(buildAnimatedNotSupportedBanner(totalSkippedAnimated, allAnimated));
         }
 
         progressText.setVisibility(View.GONE);
@@ -482,11 +497,11 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     private void addResultCard(TelegramConverter.ImportedPackResult result) {
         View card = getLayoutInflater().inflate(R.layout.item_imported_pack_result, resultsContainer, false);
 
-        ImageView icon = card.findViewById(R.id.result_pack_icon);
-        TextView name = card.findViewById(R.id.result_pack_name);
-        TextView badge = card.findViewById(R.id.result_type_badge);
-        TextView count = card.findViewById(R.id.result_sticker_count);
-        MaterialButton addBtn = card.findViewById(R.id.result_add_to_whatsapp);
+        ImageView icon  = card.findViewById(R.id.result_pack_icon);
+        TextView name   = card.findViewById(R.id.result_pack_name);
+        TextView badge  = card.findViewById(R.id.result_type_badge);
+        TextView count  = card.findViewById(R.id.result_sticker_count);
+        MaterialButton addBtn    = card.findViewById(R.id.result_add_to_whatsapp);
         MaterialButton exportBtn = card.findViewById(R.id.result_export_button);
 
         icon.setImageResource(result.isAnimated ? R.drawable.animated_pack_indicator : R.drawable.ic_fab_add);
@@ -499,6 +514,86 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         exportBtn.setOnClickListener(v -> exportConvertedPack(result.identifier, result.name));
 
         resultsContainer.addView(card);
+    }
+
+    /**
+     * Builds a themed banner card informing the user that animated stickers were skipped.
+     * Uses {@code colorSecondaryContainer} / {@code colorOnSecondaryContainer} to match
+     * the existing Material3 theme.
+     */
+    private com.google.android.material.card.MaterialCardView buildAnimatedNotSupportedBanner(
+            int skippedCount, boolean allAnimated) {
+
+        com.google.android.material.card.MaterialCardView banner =
+                new com.google.android.material.card.MaterialCardView(this);
+        int dp16 = (int) (16 * getResources().getDisplayMetrics().density);
+        int dp8  = (int) (8  * getResources().getDisplayMetrics().density);
+        int dp12 = (int) (12 * getResources().getDisplayMetrics().density);
+        LinearLayout.LayoutParams bannerLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        bannerLp.topMargin = dp12;
+        banner.setLayoutParams(bannerLp);
+        banner.setRadius(dp16);
+        banner.setCardElevation(0f);
+        banner.setStrokeWidth(0);
+
+        // Background: colorSecondaryContainer
+        int[] attrs = new int[]{com.google.android.material.R.attr.colorSecondaryContainer,
+                                com.google.android.material.R.attr.colorOnSecondaryContainer};
+        android.content.res.TypedArray ta = obtainStyledAttributes(attrs);
+        int bgColor   = ta.getColor(0, 0xFFE8DEF8);
+        int textColor = ta.getColor(1, 0xFF21005D);
+        ta.recycle();
+
+        banner.setCardBackgroundColor(bgColor);
+
+        // Inner layout
+        LinearLayout inner = new LinearLayout(this);
+        inner.setOrientation(LinearLayout.HORIZONTAL);
+        inner.setPadding(dp16, dp12, dp16, dp12);
+        inner.setGravity(android.view.Gravity.CENTER_VERTICAL);
+
+        // Icon
+        android.widget.ImageView iconView = new android.widget.ImageView(this);
+        int iconSize = (int) (28 * getResources().getDisplayMetrics().density);
+        LinearLayout.LayoutParams iconLp = new LinearLayout.LayoutParams(iconSize, iconSize);
+        iconLp.rightMargin = dp12;
+        iconView.setLayoutParams(iconLp);
+        iconView.setImageResource(R.drawable.animated_pack_indicator);
+        iconView.setColorFilter(textColor, android.graphics.PorterDuff.Mode.SRC_IN);
+        inner.addView(iconView);
+
+        // Text column
+        LinearLayout textCol = new LinearLayout(this);
+        textCol.setOrientation(LinearLayout.VERTICAL);
+        textCol.setLayoutParams(new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView title = new TextView(this);
+        title.setText(R.string.animated_not_supported_title);
+        title.setTextColor(textColor);
+        title.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f);
+        title.setTypeface(title.getTypeface(), android.graphics.Typeface.BOLD);
+        textCol.addView(title);
+
+        TextView msg = new TextView(this);
+        String msgText = allAnimated
+                ? getString(R.string.animated_not_supported_all_message)
+                : getString(R.string.animated_not_supported_message, skippedCount);
+        msg.setText(msgText);
+        msg.setTextColor(textColor);
+        msg.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f);
+        LinearLayout.LayoutParams msgLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        msgLp.topMargin = (int) (2 * getResources().getDisplayMetrics().density);
+        msg.setLayoutParams(msgLp);
+        textCol.addView(msg);
+
+        inner.addView(textCol);
+        banner.addView(inner);
+        return banner;
     }
 
     private void appendLog(String message) {

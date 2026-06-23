@@ -6,21 +6,9 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffXfermode;
-import android.media.MediaMetadataRetriever;
-import android.util.Log;
-import android.os.Build;
 import android.graphics.Color;
-
-import com.airbnb.lottie.LottieComposition;
-import com.airbnb.lottie.LottieCompositionFactory;
-import com.airbnb.lottie.LottieDrawable;
-import com.airbnb.lottie.LottieTask;
-import com.facebook.animated.webp.WebPFrame;
-import com.facebook.animated.webp.WebPImage;
-import com.facebook.imagepipeline.animated.base.AnimatedDrawableFrameInfo;
-import com.facebook.imagepipeline.common.ImageDecodeOptions;
+import android.os.Build;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -30,47 +18,36 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.text.BreakIterator;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.zip.GZIPInputStream;
 
 /**
  * On-device Telegram → WhatsApp sticker converter.
  *
- * Conversion parameters are identical to the Python bot (tg-wa.py):
+ * Only static stickers are supported on-device:
  *   • Static  → 512×512 WebP, ≤100 KB, transparent canvas
- *   • Animated → 512×512 animated WebP, ≤500 KB, transparent canvas
  *   • Tray    → 96×96 PNG, ≤50 KB
  *
- * Pack splitting rules (same as bot):
- *   1. Separate static and animated stickers into distinct groups.
- *   2. Split each group into chunks of ≤30 (WhatsApp limit).
- *   3. Discard chunks with < 3 stickers (WhatsApp minimum).
+ * Animated stickers (TGS, WebM, animated WebP) are skipped and counted in
+ * {@link ImportedPackResult#skippedAnimatedCount}.
+ *
+ * Pack splitting (chunking into ≤30) is NOT done here — the single returned
+ * pack is handled by {@link StickerPackChunkManager} at "Add to WhatsApp" time,
+ * exactly like the .wasticker import flow.
  */
 public class TelegramConverter {
 
     private static final String TAG = "TelegramConverter";
 
-    // WhatsApp limits (mirror the Python bot)
+    // WhatsApp limits
     private static final int WA_STATIC_MAX_BYTES    = 100 * 1024;  // 100 KB
-    private static final int WA_ANIMATED_MAX_BYTES  = 500 * 1024;  // 500 KB
     private static final int WA_TRAY_MAX_BYTES      = 50  * 1024;  //  50 KB
     private static final int STICKER_SIZE           = 512;
     private static final int TRAY_SIZE              = 96;
-    private static final int MAX_STICKERS_PER_PACK  = 30;
     private static final int MIN_STICKERS_PER_PACK  = 3;
-    private static final int MAX_FRAMES             = 120;
-    private static final int MAX_VIDEO_FRAMES       = 240;
-    private static final float TARGET_FPS           = 20f;
     private static final int MAX_CONSECUTIVE_NETWORK_DOWNLOAD_FAILURES = 8;
 
     // ── Result model ─────────────────────────────────────────────────────────
@@ -80,12 +57,16 @@ public class TelegramConverter {
         public final String name;
         public final int stickerCount;
         public final boolean isAnimated;
+        /** Number of animated stickers that were skipped (not converted). */
+        public final int skippedAnimatedCount;
 
-        ImportedPackResult(String identifier, String name, int stickerCount, boolean isAnimated) {
-            this.identifier   = identifier;
-            this.name         = name;
-            this.stickerCount = stickerCount;
-            this.isAnimated   = isAnimated;
+        ImportedPackResult(String identifier, String name, int stickerCount,
+                           boolean isAnimated, int skippedAnimatedCount) {
+            this.identifier           = identifier;
+            this.name                 = name;
+            this.stickerCount         = stickerCount;
+            this.isAnimated           = isAnimated;
+            this.skippedAnimatedCount = skippedAnimatedCount;
         }
     }
 
@@ -103,12 +84,16 @@ public class TelegramConverter {
     // ── Main entry point ──────────────────────────────────────────────────────
 
     /**
-     * Downloads, converts, splits, and imports a Telegram sticker set.
+     * Downloads, converts (static only), and imports a Telegram sticker set.
      *
      * @param context     Application context.
      * @param urlOrName   Full {@code t.me/addstickers/…} URL or bare set name.
+     * @param authorName  Publisher name for the pack metadata.
+     * @param customPackName Optional override for the pack title.
      * @param callback    Progress/log callbacks (called on background thread).
-     * @return List of {@link ImportedPackResult} — one per imported pack (may be multiple due to splitting).
+     * @return List of {@link ImportedPackResult} — one entry for the static pack
+     *         (which carries {@code skippedAnimatedCount} for any skipped stickers).
+     *         The list may be empty if all stickers were animated/skipped.
      */
     public static List<ImportedPackResult> importFromUrl(
             Context context,
@@ -148,10 +133,9 @@ public class TelegramConverter {
         class DownloadedSticker {
             byte[] rawBytes;
             String fileId;
-            boolean isAnimated;
-            List<String> emojis;
             boolean isTgsAnim;
             boolean isVideoAnim;
+            List<String> emojis;
         }
 
         List<DownloadedSticker> downloadedStickers = new ArrayList<>();
@@ -165,7 +149,6 @@ public class TelegramConverter {
             String fileId = sticker.getString("file_id");
             boolean isTgsAnim = sticker.optBoolean("is_animated", false);
             boolean isVideoAnim = sticker.optBoolean("is_video", false);
-            boolean isAnimated = isTgsAnim || isVideoAnim;
             List<String> emojis = extractEmojis(sticker.optString("emoji", ""));
 
             byte[] raw;
@@ -181,7 +164,6 @@ public class TelegramConverter {
                 }
 
                 log(callback, "⚠ Skipped download for sticker " + (i + 1) + ": " + e.getMessage());
-                // Add a new progress line so the next loop iteration replaces it
                 log(callback, getProgressBar("⬇ Downloading:", i + 1, total));
                 if (callback != null) callback.onProgress(i + 1, overallTotal);
 
@@ -196,14 +178,13 @@ public class TelegramConverter {
             }
 
             DownloadedSticker ds = new DownloadedSticker();
-            ds.rawBytes = raw;
-            ds.fileId = fileId;
-            ds.isAnimated = isAnimated;
-            ds.emojis = emojis;
-            ds.isTgsAnim = isTgsAnim;
+            ds.rawBytes   = raw;
+            ds.fileId     = fileId;
+            ds.isTgsAnim  = isTgsAnim;
             ds.isVideoAnim = isVideoAnim;
+            ds.emojis     = emojis;
             downloadedStickers.add(ds);
-            
+
             logReplace(callback, getProgressBar("⬇ Downloading:", i + 1, total));
             if (callback != null) callback.onProgress(i + 1, overallTotal);
         }
@@ -213,44 +194,45 @@ public class TelegramConverter {
             throw new IOException("Failed to download any stickers. Network or source issue.");
         }
 
-        log(callback, "✅ Downloaded " + totalDownloaded + " stickers. Starting parallel conversion...");
+        log(callback, "✅ Downloaded " + totalDownloaded + " stickers. Starting conversion (static only)…");
         log(callback, getProgressBar("🔄 Converting:", 0, totalDownloaded));
-        // Progress was at (total downloaded / overallTotal), now continues
         if (callback != null) callback.onProgress(total, overallTotal);
 
-        // 4. Convert All Parallel
-        List<StickerEntry> staticEntries = Collections.synchronizedList(new ArrayList<>());
-        List<StickerEntry> animatedEntries = Collections.synchronizedList(new ArrayList<>());
+        // 4. Convert static stickers; skip animated ones
+        java.util.concurrent.atomic.AtomicInteger conversionSkipped =
+                new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger animatedSkipped =
+                new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger conversionDone =
+                new java.util.concurrent.atomic.AtomicInteger(0);
 
-        java.util.concurrent.atomic.AtomicInteger conversionSkipped = new java.util.concurrent.atomic.AtomicInteger(0);
-        java.util.concurrent.atomic.AtomicInteger conversionDone = new java.util.concurrent.atomic.AtomicInteger(0);
+        List<StickerEntry> staticEntries =
+                java.util.Collections.synchronizedList(new ArrayList<>());
 
         int processors = Math.max(2, Runtime.getRuntime().availableProcessors());
-        java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newFixedThreadPool(processors);
-        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(totalDownloaded);
+        java.util.concurrent.ExecutorService executor =
+                java.util.concurrent.Executors.newFixedThreadPool(processors);
+        java.util.concurrent.CountDownLatch latch =
+                new java.util.concurrent.CountDownLatch(totalDownloaded);
 
         for (int i = 0; i < totalDownloaded; i++) {
             final DownloadedSticker ds = downloadedStickers.get(i);
 
             executor.submit(() -> {
                 try {
-                    boolean animatedWebP = isAnimatedWebPBytes(ds.rawBytes);
-                    boolean treatAsAnimated = ds.isTgsAnim || ds.isVideoAnim || animatedWebP;
+                    // Determine if this sticker is animated
+                    boolean isAnimatedByMeta = ds.isTgsAnim || ds.isVideoAnim;
+                    boolean isAnimatedWebP   = !isAnimatedByMeta && isAnimatedWebPBytes(ds.rawBytes);
+                    boolean treatAsAnimated  = isAnimatedByMeta || isAnimatedWebP;
 
-                    byte[] converted;
-                    if (ds.isTgsAnim) {
-                        converted = convertTgsSticker(context, ds.rawBytes, callback);
-                    } else if (ds.isVideoAnim) {
-                        converted = convertVideoSticker(context, ds.rawBytes, callback);
-                    } else if (animatedWebP) {
-                        converted = convertAnimatedWebPSticker(ds.rawBytes, callback);
+                    if (treatAsAnimated) {
+                        // Skip — animated stickers are not supported on-device
+                        animatedSkipped.incrementAndGet();
+                        logVerbose(callback, "⏭ Skipped animated sticker (not supported)");
                     } else {
-                        converted = convertStaticSticker(ds.rawBytes);
+                        byte[] converted = convertStaticSticker(ds.rawBytes);
+                        staticEntries.add(new StickerEntry(ds.fileId, converted, ds.emojis));
                     }
-
-                    StickerEntry entry = new StickerEntry(ds.fileId, converted, ds.emojis, treatAsAnimated);
-                    if (treatAsAnimated) animatedEntries.add(entry);
-                    else staticEntries.add(entry);
 
                 } catch (Exception e) {
                     conversionSkipped.incrementAndGet();
@@ -272,58 +254,40 @@ public class TelegramConverter {
             throw new IOException("Conversion was interrupted.");
         }
 
-        int totalSkipped = downloadSkipped + conversionSkipped.get();
-        int convertedCount = staticEntries.size() + animatedEntries.size();
-        log(callback, "✅ Converted: " + staticEntries.size() + " static, " + animatedEntries.size() + " animated"
-            + " (skipped " + totalSkipped + ")");
+        int skippedAnimCount  = animatedSkipped.get();
+        int totalSkipped      = downloadSkipped + conversionSkipped.get();
+        int convertedCount    = staticEntries.size();
+
+        log(callback, "✅ Converted: " + convertedCount + " static"
+            + " | skipped animated: " + skippedAnimCount
+            + " | other skipped: " + totalSkipped);
+
+        if (convertedCount == 0 && skippedAnimCount > 0) {
+            // All stickers were animated — surface a clear message and return an empty list
+            // (the caller/UI will display the animated-not-supported banner).
+            log(callback, "ℹ️ All stickers in this pack are animated and were skipped.");
+            ImportedPackResult placeholder = new ImportedPackResult(
+                    "", packTitle, 0, false, skippedAnimCount);
+            List<ImportedPackResult> results = new ArrayList<>();
+            results.add(placeholder);
+            return results;
+        }
 
         if (convertedCount < MIN_STICKERS_PER_PACK) {
             throw new IOException("Only " + convertedCount + " sticker(s) converted successfully."
                 + " This usually indicates a network or source format issue.");
         }
 
-        // 4. Build pack names and split into ≤30-sticker chunks
+        // 5. Build a single pack (no internal chunking — StickerPackChunkManager handles ≤30 splitting)
         String publisher = authorName != null ? authorName.trim() : "";
         if (publisher.isEmpty()) publisher = "Telegram";
 
-        boolean hasBoth = !staticEntries.isEmpty() && !animatedEntries.isEmpty();
-
-        List<List<StickerEntry>> staticChunks   = chunk(staticEntries);
-        List<List<StickerEntry>> animatedChunks = chunk(animatedEntries);
+        log(callback, "💾 Saving '" + packTitle + "' (" + convertedCount + " static stickers)…");
+        String id = savePackToStorage(context, packTitle, publisher, staticEntries);
+        log(callback, "✅ Saved pack: " + packTitle);
 
         List<ImportedPackResult> results = new ArrayList<>();
-
-        // Static packs
-        for (int ci = 0; ci < staticChunks.size(); ci++) {
-            List<StickerEntry> ch = staticChunks.get(ci);
-            if (ch.size() < MIN_STICKERS_PER_PACK) {
-                log(callback, "⚠ Static chunk " + (ci + 1) + " has only " + ch.size() + " stickers (< 3) — skipped");
-                continue;
-            }
-            String name = buildPackName(packTitle, hasBoth, false, ci + 1, staticChunks.size());
-            log(callback, "💾 Saving '" + name + "' (" + ch.size() + " static stickers)…");
-            String id = savePackToStorage(context, name, publisher, ch, false);
-            results.add(new ImportedPackResult(id, name, ch.size(), false));
-            log(callback, "✅ Saved pack: " + name);
-        }
-
-        // Animated packs
-        for (int ci = 0; ci < animatedChunks.size(); ci++) {
-            List<StickerEntry> ch = animatedChunks.get(ci);
-            if (ch.size() < MIN_STICKERS_PER_PACK) {
-                log(callback, "⚠ Animated chunk " + (ci + 1) + " has only " + ch.size() + " stickers (< 3) — skipped");
-                continue;
-            }
-            String name = buildPackName(packTitle, hasBoth, true, ci + 1, animatedChunks.size());
-            log(callback, "💾 Saving '" + name + "' (" + ch.size() + " animated stickers)…");
-            String id = savePackToStorage(context, name, publisher, ch, true);
-            results.add(new ImportedPackResult(id, name, ch.size(), true));
-            log(callback, "✅ Saved pack: " + name);
-        }
-
-        if (results.isEmpty()) {
-            throw new IOException("No valid packs could be created from this sticker set");
-        }
+        results.add(new ImportedPackResult(id, packTitle, convertedCount, false, skippedAnimCount));
         return results;
     }
 
@@ -331,8 +295,6 @@ public class TelegramConverter {
 
     /**
      * Converts static WebP/PNG bytes to a 512×512 WebP ≤100 KB.
-     * Mirror of Python bot's {@code convert_to_whatsapp_static()}.
-     *
      * Mirrors Python bot quality stepping for static stickers.
      */
     static byte[] convertStaticSticker(byte[] data) throws IOException {
@@ -343,7 +305,7 @@ public class TelegramConverter {
 
         int quality = 95;
         Bitmap.CompressFormat format;
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             format = Bitmap.CompressFormat.WEBP_LOSSY;
         } else {
             // noinspection deprecation
@@ -370,361 +332,27 @@ public class TelegramConverter {
         return bos.toByteArray();
     }
 
-    // ── Conversion: TGS (Lottie / animated sticker) ───────────────────────────
+    // ── Animated WebP detection ───────────────────────────────────────────────
 
     /**
-     * Converts a TGS (gzip-compressed Lottie JSON) to an animated WebP.
-     * Mirror of Python bot's {@code convert_tgs_to_animated_webp()}.
+     * Returns true if the given bytes represent an animated WebP
+     * (contains an ANIM chunk in the RIFF/WEBP header).
+     * We do a lightweight byte-pattern check to avoid Fresco dependency.
      */
-    static byte[] convertTgsSticker(Context context, byte[] tgsData, ConversionCallback callback) throws IOException {
-        // 1. Decompress gzip → JSON string
-        byte[] jsonBytes = decompressGzip(tgsData);
-
-        // 2. Parse Lottie composition first and use its authoritative frame metadata.
-        LottieComposition composition = parseLottieSync(jsonBytes, callback);
-        if (composition == null) throw new IOException("Failed to parse Lottie composition");
-
-        float fps = composition.getFrameRate();
-        int firstFrame = (int) composition.getStartFrame();
-        int lastFrame = (int) composition.getEndFrame();
-        int renderFrames = Math.min(
-            Math.max(2, lastFrame - firstFrame),
-            Math.min((int) (10.0f * fps), MAX_FRAMES)
-        );
-        int frameDurationMs = Math.max(8, (int) (1000f / Math.max(1f, fps)));
-
-        logVerbose(callback, "TGS meta: fps=" + fps
-            + " frames=" + firstFrame + ".." + lastFrame
-            + " rendering=" + renderFrames
-            + " durationMs=" + frameDurationMs);
-
-        // 3. Render frames.
-        List<Bitmap> frames = renderLottieFrames(composition, firstFrame, renderFrames, callback);
-        if (frames.size() < 2) throw new IOException("TGS produced too few frames");
-
-        // 4. Encode animated WebP with strict validation gates.
-        byte[] encoded = null;
-        try {
-            encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
-            // Dump a debug copy to cache for inspection and logging
-            try {
-                File dbg = File.createTempFile("dbg_tgs_", ".webp", context.getCacheDir());
-                try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
-                logVerbose(callback, "TGS debug output: " + dbg.getAbsolutePath()
-                        + " bytes=" + (encoded != null ? encoded.length : 0)
-                        + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
-                        + " frames=" + AnimatedWebPWriter.countFrames(encoded));
-            } catch (Exception ignored) {}
-
-            validateAnimatedOutput(encoded);
-            return encoded;
-        } catch (IOException e) {
-            // If validation fails, still dump bytes for offline inspection
-            if (encoded != null) {
-                try {
-                    File dbg = File.createTempFile("dbg_tgs_fail_", ".webp", context.getCacheDir());
-                    try (FileOutputStream fos = new FileOutputStream(dbg)) { fos.write(encoded); }
-                            logVerbose(callback, "TGS validation failed — dumped: " + dbg.getAbsolutePath()
-                            + " bytes=" + encoded.length
-                            + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
-                            + " frames=" + AnimatedWebPWriter.countFrames(encoded));
-                } catch (Exception ignored) {}
-            }
-            throw e;
-        }
-    }
-
-    /** Synchronously parses a Lottie composition from JSON bytes. */
-    private static LottieComposition parseLottieSync(byte[] jsonBytes, ConversionCallback callback) {
-        try {
-            String jsonString = new String(jsonBytes, "UTF-8");
-            com.airbnb.lottie.LottieResult<LottieComposition> result = 
-                LottieCompositionFactory.fromJsonStringSync(jsonString, null);
-            LottieComposition composition = result.getValue();
-            if (composition == null) {
-                Throwable exception = result.getException();
-                logError(callback, "Lottie parse returned null: "
-                        + (exception != null ? exception.getMessage() : "unknown"),
-                        exception);
-            }
-            return composition;
-        } catch (Exception e) {
-            logError(callback, "parseLottieSync threw: " + e.getMessage(), e);
-            return null;
-        }
-    }
-
-    /** Renders {@code count} frames starting at {@code startFrame} from a Lottie composition. */
-    private static List<Bitmap> renderLottieFrames(LottieComposition composition, int startFrame, int count,
-                                                   ConversionCallback callback) {
-        List<Bitmap> frames = new ArrayList<>();
-        LottieDrawable drawable = new LottieDrawable();
-        drawable.setComposition(composition);
-        drawable.setRepeatCount(0);
-        drawable.setBounds(0, 0, STICKER_SIZE, STICKER_SIZE);
-
-        final int firstFrame = (int) composition.getStartFrame();
-        final int lastFrame = (int) composition.getEndFrame();
-
-        for (int i = 0; i < count; i++) {
-            int frameToRender = Math.max(firstFrame, Math.min(lastFrame, startFrame + i));
-            float progress;
-            if (lastFrame > firstFrame) {
-                progress = (frameToRender - firstFrame) / (float) (lastFrame - firstFrame);
-            } else {
-                progress = 0f;
-            }
-            drawable.setProgress(Math.max(0f, Math.min(progress, 1f)));
-
-            Bitmap bmp = Bitmap.createBitmap(STICKER_SIZE, STICKER_SIZE, Bitmap.Config.ARGB_8888);
-            bmp.eraseColor(Color.TRANSPARENT);
-            drawable.draw(new Canvas(bmp));
-            frames.add(bmp);
-        }
-
-        boolean allBlank = true;
-        for (Bitmap frame : frames) {
-            if (!isBitmapFullyTransparent(frame)) {
-                allBlank = false;
-                break;
-            }
-        }
-        if (allBlank) {
-            logError(callback, "renderLottieFrames: all " + frames.size() + " frames are transparent", null);
-            for (Bitmap frame : frames) {
-                frame.recycle();
-            }
-            frames.clear();
-        } else {
-            logVerbose(callback, "renderLottieFrames: rendered " + frames.size() + " frames");
-        }
-        return frames;
-    }
-
-    // ── Conversion: Video (WebM) ──────────────────────────────────────────────
-
-    /**
-     * Converts a WebM video sticker to animated WebP using {@link MediaMetadataRetriever}.
-     * Mirror of Python bot's {@code convert_video_to_animated_webp()}.
-     */
-    static byte[] convertVideoSticker(Context context, byte[] webmData, ConversionCallback callback) throws IOException {
-        File tmpFile = File.createTempFile("tg_sticker_", ".webm", context.getCacheDir());
-        try {
-            try (FileOutputStream fos = new FileOutputStream(tmpFile)) { fos.write(webmData); }
-
-            // Use alpha-aware extraction first, then fall back to the basic retriever path.
-            List<Bitmap> frames = null;
-            try {
-                frames = extractFramesWithAlpha(context, tmpFile);
-                if (frames != null && frames.size() >= 2) {
-                    logVerbose(callback, "Video source: alpha-aware extraction succeeded, frames=" + frames.size());
-                }
-            } catch (Exception e) {
-                logVerbose(callback, "Video source: alpha-aware extraction failed, falling back: " + e.getMessage());
-            }
-
-            if (frames == null || frames.size() < 2) {
-                frames = extractFramesFallback(tmpFile);
-                if (frames != null) {
-                    logVerbose(callback, "Video source: fallback extraction produced frames=" + frames.size());
-                }
-            }
-
-            if (frames == null || frames.size() < 2) {
-                throw new IOException("No frames extracted from WebM");
-            }
-
-            int frameDurationMs = 50; // 20fps default
-            logVerbose(callback, "Video source: frameDurationMs=" + frameDurationMs + " frameCount=" + frames.size());
-
-            byte[] encoded = AnimatedWebPWriter.encode(frames, frameDurationMs);
-            logVerbose(callback, "Video output: bytes=" + encoded.length
-                    + " isAnimated=" + AnimatedWebPWriter.isAnimated(encoded)
-                    + " frames=" + AnimatedWebPWriter.countFrames(encoded));
-            validateAnimatedOutput(encoded);
-            return encoded;
-        } finally {
-            tmpFile.delete();
-        }
-    }
-
-        private static List<Bitmap> extractFramesWithAlpha(Context context, File videoFile) throws Exception {
-            // ExoPlayer's MediaMetadataRetriever on API 27+ supports VP9 alpha via setDataSource
-            // On supported devices this returns ARGB frames preserving transparency
-            android.media.MediaMetadataRetriever retriever = new android.media.MediaMetadataRetriever();
-            retriever.setDataSource(videoFile.getAbsolutePath());
-
-            String durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-            long durationMs = durStr != null ? Long.parseLong(durStr) : 3000;
-            durationMs = Math.min(durationMs, 10_000);
-
-            int frameCount = Math.min((int)(durationMs * 20f / 1000f), MAX_VIDEO_FRAMES);
-            if (frameCount < 2) frameCount = 2;
-
-            List<Bitmap> frames = new ArrayList<>();
-            for (int i = 0; i < frameCount; i++) {
-                long timeUs = (long)((double) i / frameCount * durationMs * 1000L);
-
-                // getFrameAtTime with OPTION_CLOSEST_SYNC returns ARGB_8888 on API 27+
-                // which preserves the alpha plane from VP9 Profile 1/3 (used by Telegram)
-                Bitmap frame;
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                    frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
-                } else {
-                    frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
-                }
-
-                if (frame == null) continue;
-
-                // Check if this frame actually has alpha — if any pixel is non-opaque, alpha survived
-                Bitmap canvas = makeCanvas(frame, STICKER_SIZE);
-                frame.recycle();
-                frames.add(canvas);
-            }
-            retriever.release();
-            return frames;
-        }
-
-        private static List<Bitmap> extractFramesFallback(File videoFile) {
-            try {
-                MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-                retriever.setDataSource(videoFile.getAbsolutePath());
-                String durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
-                long durationMs = durStr != null ? Long.parseLong(durStr) : 3000;
-                durationMs = Math.min(durationMs, 10_000);
-                int frameCount = Math.min((int)(durationMs * 20f / 1000f), MAX_VIDEO_FRAMES);
-                if (frameCount < 2) frameCount = 2;
-                List<Bitmap> frames = new ArrayList<>();
-                for (int i = 0; i < frameCount; i++) {
-                    long timeUs = (long)((double) i / frameCount * durationMs * 1000L);
-                    Bitmap frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
-                    if (frame == null) continue;
-                    frames.add(makeCanvas(frame, STICKER_SIZE));
-                    frame.recycle();
-                }
-                retriever.release();
-                return frames;
-            } catch (Exception e) {
-                return null;
-            }
-        }
-        
-    private static void validateAnimatedOutput(byte[] encoded) throws IOException {
-        if (encoded == null || encoded.length < 128) {
-            throw new IOException("Converted animated output is empty or too small");
-        }
-        if (encoded.length > WA_ANIMATED_MAX_BYTES) {
-            throw new IOException("Converted animated output exceeds 500 KB limit");
-        }
-        if (!AnimatedWebPWriter.isAnimated(encoded)) {
-            throw new IOException("Converted animated output is not marked as animated WebP");
-        }
-        if (AnimatedWebPWriter.countFrames(encoded) < 2) {
-            throw new IOException("Converted animated output has fewer than 2 frames");
-        }
-    }
-
     private static boolean isAnimatedWebPBytes(byte[] data) {
-        if (data == null || data.length == 0) {
-            return false;
-        }
-        try {
-            WebPImage webPImage = WebPImage.createFromByteArray(data, ImageDecodeOptions.defaults());
-            return webPImage != null && webPImage.getFrameCount() > 1;
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private static byte[] convertAnimatedWebPSticker(byte[] webpData, ConversionCallback callback) throws IOException {
-        WebPImage image = WebPImage.createFromByteArray(webpData, ImageDecodeOptions.defaults());
-        if (image == null) {
-            throw new IOException("Failed to decode animated WebP sticker");
-        }
-
-        int frameCount = image.getFrameCount();
-        if (frameCount < 2) {
-            throw new IOException("Animated WebP sticker contains fewer than 2 frames");
-        }
-
-        logVerbose(callback, "Animated WebP source: width=" + image.getWidth()
-                + " height=" + image.getHeight()
-                + " frameCount=" + frameCount
-                + " durationMs=" + image.getDuration());
-
-        List<Bitmap> frames = new ArrayList<>(Math.min(frameCount, MAX_FRAMES));
-        int[] durations = image.getFrameDurations();
-        int totalDuration = 0;
-        int imageWidth = Math.max(1, image.getWidth());
-        int imageHeight = Math.max(1, image.getHeight());
-
-        Bitmap composed = Bitmap.createBitmap(imageWidth, imageHeight, Bitmap.Config.ARGB_8888);
-        Canvas composedCanvas = new Canvas(composed);
-        Paint clearPaint = new Paint();
-        clearPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
-
-        int step = Math.max(1, (int) Math.ceil((double) frameCount / MAX_FRAMES));
-
-        for (int i = 0; i < frameCount; i += step) {
-            WebPFrame frame = image.getFrame(i);
-            try {
-                AnimatedDrawableFrameInfo info = image.getFrameInfo(i);
-
-                int frameX = Math.max(0, info.xOffset);
-                int frameY = Math.max(0, info.yOffset);
-                int frameW = Math.min(Math.max(1, info.width), imageWidth - frameX);
-                int frameH = Math.min(Math.max(1, info.height), imageHeight - frameY);
-
-                if (info.blendOperation == AnimatedDrawableFrameInfo.BlendOperation.NO_BLEND
-                        && frameW > 0 && frameH > 0) {
-                    composedCanvas.drawRect(frameX, frameY, frameX + frameW, frameY + frameH, clearPaint);
-                }
-
-                Bitmap rendered = Bitmap.createBitmap(frameW, frameH, Bitmap.Config.ARGB_8888);
-                frame.renderFrame(frameW, frameH, rendered);
-                composedCanvas.drawBitmap(rendered, frameX, frameY, null);
-                rendered.recycle();
-
-                frames.add(makeCanvas(composed, STICKER_SIZE));
-
-                if (info.disposalMethod == AnimatedDrawableFrameInfo.DisposalMethod.DISPOSE_TO_BACKGROUND
-                        && frameW > 0 && frameH > 0) {
-                    composedCanvas.drawRect(frameX, frameY, frameX + frameW, frameY + frameH, clearPaint);
-                }
-
-                int durationMs = (durations != null && i < durations.length) ? durations[i] : frame.getDurationMs();
-                if (durationMs > 0) {
-                    totalDuration += durationMs * step;
-                }
-            } finally {
-                frame.dispose();
+        if (data == null || data.length < 20) return false;
+        // WebP: bytes 0-3 = "RIFF", bytes 8-11 = "WEBP"
+        if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return false;
+        if (data[8] != 'W' || data[9] != 'E' || data[10] != 'B' || data[11] != 'P') return false;
+        // VP8X chunk with Animation bit set: bytes 12-15 = "VP8X", bit 1 of byte 20 = Animation
+        // Search for "ANIM" chunk anywhere in first 100 bytes as a quick heuristic
+        int limit = Math.min(data.length - 4, 200);
+        for (int i = 12; i < limit; i++) {
+            if (data[i] == 'A' && data[i+1] == 'N' && data[i+2] == 'I' && data[i+3] == 'M') {
+                return true;
             }
         }
-
-        composed.recycle();
-
-        if (frames.size() < 2) {
-            throw new IOException("Animated WebP sticker produced too few rendered frames");
-        }
-
-        int frameDurationMs = totalDuration > 0
-                ? Math.max(8, totalDuration / frames.size())
-                : 100;
-        logVerbose(callback, "Animated WebP render: composedFrames=" + frames.size()
-            + " frameDurationMs=" + frameDurationMs
-            + " totalDuration=" + totalDuration);
-        return AnimatedWebPWriter.encode(frames, frameDurationMs);
-    }
-
-    private static boolean isBitmapFullyTransparent(Bitmap bmp) {
-        int w = bmp.getWidth();
-        int h = bmp.getHeight();
-        int[] pixels = new int[w * h];
-        bmp.getPixels(pixels, 0, w, 0, 0, w, h);
-        for (int px : pixels) {
-            if (((px >>> 24) & 0xFF) > 0) return false;
-        }
-        return true;
+        return false;
     }
 
     // ── Tray icon ─────────────────────────────────────────────────────────────
@@ -732,10 +360,8 @@ public class TelegramConverter {
     /**
      * Creates a 96×96 PNG tray icon from the first sticker's converted bytes.
      * Mirror of Python bot's {@code optimize_tray_icon()}.
-     *
-     * Optimized to consistently produce small tray icons (typically <30 KB).
      */
-    static byte[] convertTrayIcon(byte[] webpData, boolean isAnimated) throws IOException {
+    static byte[] convertTrayIcon(byte[] webpData) throws IOException {
         Bitmap src = BitmapFactory.decodeByteArray(webpData, 0, webpData.length);
         if (src == null) throw new IOException("Cannot decode sticker for tray icon");
         Bitmap canvas = makeCanvas(src, TRAY_SIZE);
@@ -743,13 +369,13 @@ public class TelegramConverter {
 
         // Try PNG first (lossless, typically smallest for small images)
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        canvas.compress(Bitmap.CompressFormat.PNG, 100, bos); // PNG quality param is ignored
+        canvas.compress(Bitmap.CompressFormat.PNG, 100, bos);
         if (bos.size() <= WA_TRAY_MAX_BYTES) {
             canvas.recycle();
             return bos.toByteArray();
         }
 
-        // Fallback: WebP with quality ladder if PNG somehow exceeds 50 KB (extremely rare for 96×96)
+        // Fallback: WebP with quality ladder
         Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                 ? Bitmap.CompressFormat.WEBP_LOSSY
                 : Bitmap.CompressFormat.WEBP;
@@ -770,51 +396,25 @@ public class TelegramConverter {
         return finalBos.toByteArray();
     }
 
-    // ── Pack splitting ────────────────────────────────────────────────────────
-
-    private static List<List<StickerEntry>> chunk(List<StickerEntry> entries) {
-        List<List<StickerEntry>> chunks = new ArrayList<>();
-        for (int i = 0; i < entries.size(); i += MAX_STICKERS_PER_PACK) {
-            chunks.add(entries.subList(i, Math.min(i + MAX_STICKERS_PER_PACK, entries.size())));
-        }
-        return chunks;
-    }
-
-    private static String buildPackName(String base, boolean hasBothTypes, boolean animated,
-                                        int chunk, int total) {
-        String typeSuffix = hasBothTypes ? (animated ? " Animated" : " Static") : "";
-        String chunkSuffix = (total > 1) ? " [" + chunk + "/" + total + "]" : "";
-        // Truncate base to avoid excessively long names
-        if (base.length() > 30) base = base.substring(0, 30).trim();
-        return base + typeSuffix + chunkSuffix;
-    }
-
     // ── Storage ───────────────────────────────────────────────────────────────
 
     /**
      * Writes a pack to the app's sticker storage and updates contents.json.
      * Returns the new pack identifier.
+     *
+     * <p>No internal chunking is performed here. Packs with more than 30 stickers
+     * are handled by {@link StickerPackChunkManager} when the user taps "Add to WhatsApp".</p>
      */
     private static String savePackToStorage(Context context, String name, String author,
-                                            List<StickerEntry> stickers, boolean isAnimated)
+                                            List<StickerEntry> stickers)
             throws IOException, JSONException {
 
         String identifier = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        String rootPath   = WastickerParser.getStickerFolderPath(context);
-        boolean isSAF     = WastickerParser.isCustomPathUri(context);
-
-        // Create pack directory
-        File packDir = null;
-        if (!isSAF) {
-            packDir = new File(rootPath, identifier);
-            if (!packDir.exists()) packDir.mkdirs();
-        }
-        // SAF path handled via WastickerParser's ensureDirectory via importStickerPack below
 
         // Build a temp .wasticker zip in cache and use WastickerParser.importStickerPack()
         File tmpZip = File.createTempFile("tg_import_", ".wasticker", context.getCacheDir());
         try {
-            buildWastickerZip(tmpZip, identifier, name, author, stickers, isAnimated);
+            buildWastickerZip(tmpZip, identifier, name, author, stickers);
             android.net.Uri zipUri = android.net.Uri.fromFile(tmpZip);
             WastickerParser.importStickerPack(context, zipUri);
             StickerContentProvider provider = StickerContentProvider.getInstance();
@@ -829,8 +429,9 @@ public class TelegramConverter {
      * Builds a WhatsApp-compliant .wasticker ZIP in {@code outFile}.
      */
     private static void buildWastickerZip(File outFile, String identifier, String name,
-                                          String author, List<StickerEntry> stickers,
-                                          boolean isAnimated) throws IOException, JSONException {
+                                          String author, List<StickerEntry> stickers)
+            throws IOException, JSONException {
+
         // Build contents.json
         JSONArray stickersArray = new JSONArray();
         for (int i = 0; i < stickers.size(); i++) {
@@ -858,7 +459,7 @@ public class TelegramConverter {
         pack.put("license_agreement_website", "");
         pack.put("image_data_version", "1");
         pack.put("avoid_cache", false);
-        pack.put("animated_sticker_pack", isAnimated);
+        pack.put("animated_sticker_pack", false);
         pack.put("stickers", stickersArray);
 
         JSONArray packsArray = new JSONArray();
@@ -871,7 +472,7 @@ public class TelegramConverter {
         // Build tray icon from first sticker
         byte[] trayBytes;
         try {
-            trayBytes = convertTrayIcon(stickers.get(0).converted, isAnimated);
+            trayBytes = convertTrayIcon(stickers.get(0).converted);
         } catch (Exception e) {
             // Fallback: transparent 96×96 PNG
             Bitmap empty = Bitmap.createBitmap(TRAY_SIZE, TRAY_SIZE, Bitmap.Config.ARGB_8888);
@@ -884,12 +485,8 @@ public class TelegramConverter {
         // Write ZIP
         try (java.util.zip.ZipOutputStream zos = new java.util.zip.ZipOutputStream(
                 new java.io.BufferedOutputStream(new FileOutputStream(outFile)))) {
-
-            // contents.json
             putZipEntry(zos, "contents.json", contentsJson.getBytes("UTF-8"));
-            // tray.png
             putZipEntry(zos, "tray.png", trayBytes);
-            // stickers
             for (StickerEntry e : stickers) {
                 putZipEntry(zos, e.fileName, e.converted);
             }
@@ -906,7 +503,7 @@ public class TelegramConverter {
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     /**
-     * Creates a 512×512 (or {@code size}×{@code size}) ARGB_8888 transparent canvas
+     * Creates a {@code size}×{@code size} ARGB_8888 transparent canvas
      * with the source bitmap thumbnail-fit and centred. Same logic as the Python bot.
      */
     private static Bitmap makeCanvas(Bitmap src, int size) {
@@ -919,18 +516,8 @@ public class TelegramConverter {
         Matrix m = new Matrix();
         m.postScale(scale, scale);
         m.postTranslate(dx, dy);
-        c.drawBitmap(src, m, new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG));
+        c.drawBitmap(src, m, new Paint(Paint.FILTER_BITMAP_FLAG));
         return canvas;
-    }
-
-    private static byte[] decompressGzip(byte[] compressed) throws IOException {
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        try (GZIPInputStream gis = new GZIPInputStream(
-                new java.io.ByteArrayInputStream(compressed))) {
-            byte[] buf = new byte[8192]; int n;
-            while ((n = gis.read(buf)) != -1) bos.write(buf, 0, n);
-        }
-        return bos.toByteArray();
     }
 
     /**
@@ -939,7 +526,6 @@ public class TelegramConverter {
     static String extractSetName(String input) {
         if (input == null) return "";
         input = input.trim();
-        // https://t.me/addstickers/PackName
         int idx = input.lastIndexOf('/');
         if (idx >= 0 && idx < input.length() - 1) {
             return input.substring(idx + 1);
@@ -955,16 +541,6 @@ public class TelegramConverter {
     private static void logVerbose(ConversionCallback cb, String msg) {
         Log.d(TAG, msg);
         if (cb != null) cb.onLog(msg);
-    }
-
-    private static void logError(ConversionCallback cb, String msg, Throwable error) {
-        Log.e(TAG, msg, error);
-        if (cb != null) {
-            cb.onLog("❌ " + msg);
-            if (error != null) {
-                cb.onLog(android.util.Log.getStackTraceString(error));
-            }
-        }
     }
 
     private static void logReplace(ConversionCallback cb, String msg) {
@@ -1035,14 +611,12 @@ public class TelegramConverter {
         final String fileId;
         final byte[] converted;
         final List<String> emojis;
-        final boolean animated;
         String fileName; // set during ZIP assembly
 
-        StickerEntry(String fileId, byte[] converted, List<String> emojis, boolean animated) {
+        StickerEntry(String fileId, byte[] converted, List<String> emojis) {
             this.fileId    = fileId;
             this.converted = converted;
             this.emojis    = emojis;
-            this.animated  = animated;
         }
     }
 }

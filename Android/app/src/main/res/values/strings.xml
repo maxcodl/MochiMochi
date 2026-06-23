@@ -240,6 +240,9 @@
     <string name="animated_badge">Animated</string>
     <string name="tg_fetching_label">Fetching pack info…</string>
     <string name="tg_progress_label">Converting sticker %1$d / %2$d…</string>
+    <string name="animated_not_supported_title">Animated stickers skipped</string>
+    <string name="animated_not_supported_message">%d animated sticker(s) were skipped — the on-device converter only supports static stickers. Use the Python bot for animated packs.</string>
+    <string name="animated_not_supported_all_message">This pack contains only animated stickers, which are not supported by the on-device converter. Use the Python bot to convert animated packs.</string>
 
     <!-- Telegram Bot Token Configuration -->
     <string name="settings_telegram_import_label">TELEGRAM BOT TOKEN</string>

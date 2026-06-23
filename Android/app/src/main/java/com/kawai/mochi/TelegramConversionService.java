@@ -126,7 +126,16 @@ public class TelegramConversionService extends Service {
 
                 List<ConversionTaskManager.TaskPackResult> results = new ArrayList<>();
                 for (TelegramConverter.ImportedPackResult r : imported) {
-                    results.add(new ConversionTaskManager.TaskPackResult(r.identifier, r.name, r.stickerCount, r.isAnimated));
+                    // Only add real packs (identifier non-empty); animated-only packs have empty id
+                    if (r.identifier != null && !r.identifier.isEmpty()) {
+                        results.add(new ConversionTaskManager.TaskPackResult(
+                                r.identifier, r.name, r.stickerCount, r.isAnimated,
+                                r.skippedAnimatedCount));
+                    } else if (r.skippedAnimatedCount > 0) {
+                        // Animated-only pack: add a marker result (id="") so the UI shows the banner
+                        results.add(new ConversionTaskManager.TaskPackResult(
+                                "", r.name, 0, false, r.skippedAnimatedCount));
+                    }
                 }
 
                 manager.markSucceeded(taskId, results);

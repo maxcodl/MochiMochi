@@ -28,12 +28,16 @@ public class ConversionTaskManager {
         public final String name;
         public final int stickerCount;
         public final boolean isAnimated;
+        /** Number of animated stickers skipped (not converted) for this result. */
+        public final int skippedAnimatedCount;
 
-        public TaskPackResult(String identifier, String name, int stickerCount, boolean isAnimated) {
-            this.identifier = identifier;
-            this.name = name;
-            this.stickerCount = stickerCount;
-            this.isAnimated = isAnimated;
+        public TaskPackResult(String identifier, String name, int stickerCount,
+                              boolean isAnimated, int skippedAnimatedCount) {
+            this.identifier           = identifier;
+            this.name                 = name;
+            this.stickerCount         = stickerCount;
+            this.isAnimated           = isAnimated;
+            this.skippedAnimatedCount = skippedAnimatedCount;
         }
     }
 
@@ -75,6 +79,7 @@ public class ConversionTaskManager {
                 r.put("name", res.name);
                 r.put("stickerCount", res.stickerCount);
                 r.put("isAnimated", res.isAnimated);
+                r.put("skippedAnimatedCount", res.skippedAnimatedCount);
                 resultsArr.put(r);
             }
             obj.put("results", resultsArr);
@@ -114,7 +119,8 @@ public class ConversionTaskManager {
                             r.getString("identifier"),
                             r.getString("name"),
                             r.getInt("stickerCount"),
-                            r.getBoolean("isAnimated")
+                            r.getBoolean("isAnimated"),
+                            r.optInt("skippedAnimatedCount", 0)
                     ));
                 }
             }
