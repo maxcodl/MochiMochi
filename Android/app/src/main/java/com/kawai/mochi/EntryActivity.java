@@ -15,6 +15,7 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
@@ -24,9 +25,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class EntryActivity extends BaseActivity {
-    private static final ExecutorService executor = Executors.newCachedThreadPool();
+    private static final ExecutorService executor = Executors.newFixedThreadPool(2);
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private View progressBar;
+    private LinearProgressIndicator progressBar;
     private View logoContainer;
     private TextView errorMessageText;
     private final AtomicBoolean taskCancelled = new AtomicBoolean(false);
@@ -70,7 +71,7 @@ public class EntryActivity extends BaseActivity {
     }
 
     private void showStickerPack(ArrayList<StickerPack> stickerPackList) {
-        progressBar.setVisibility(View.GONE);
+        if (progressBar != null) progressBar.setVisibility(View.GONE);
         // Always go to list screen
         final Intent intent = new Intent(this, StickerPackListActivity.class);
         intent.putParcelableArrayListExtra(StickerPackListActivity.EXTRA_STICKER_PACK_LIST_DATA, stickerPackList);
@@ -80,7 +81,7 @@ public class EntryActivity extends BaseActivity {
     }
 
     private void showErrorMessage(String errorMessage) {
-        progressBar.setVisibility(View.GONE);
+        if (progressBar != null) progressBar.setVisibility(View.GONE);
         Log.e("EntryActivity", "error fetching sticker packs, " + errorMessage);
         
         if (errorMessageText != null) {
@@ -124,13 +125,6 @@ public class EntryActivity extends BaseActivity {
                 if (stickerPackList.size() == 0) {
                     result = new Pair<>(null, new ArrayList<>());
                 } else {
-                    for (StickerPack stickerPack : stickerPackList) {
-                        try {
-                            StickerPackValidator.verifyStickerPackValidity(activity, stickerPack);
-                        } catch (Exception e) {
-                            Log.w("EntryActivity", "Validation warning for " + stickerPack.name + ": " + e.getMessage());
-                        }
-                    }
                     result = new Pair<>(null, stickerPackList);
                 }
             } catch (Exception e) {
@@ -157,7 +151,15 @@ public class EntryActivity extends BaseActivity {
             if (activity == null) return;
             Pair<String, ArrayList<StickerPack>> result;
             try {
-                WastickerParser.importStickerPack(activity, uri);
+                WastickerParser.importStickerPack(activity, uri, (current, total) -> {
+                    mainHandler.post(() -> {
+                        if (activity.progressBar != null) {
+                            activity.progressBar.setIndeterminate(false);
+                            activity.progressBar.setMax(total);
+                            activity.progressBar.setProgressCompat(current, true);
+                        }
+                    });
+                });
                 
                 // Invalidate the cache after importing
                 StickerContentProvider provider = StickerContentProvider.getInstance();
@@ -165,6 +167,7 @@ public class EntryActivity extends BaseActivity {
                     provider.invalidateStickerPackList();
                 }
 
+                // Keep list consistent: after import, show complete pack list, not only the imported one.
                 ArrayList<StickerPack> packs = StickerPackLoader.fetchStickerPacks(activity);
                 result = new Pair<>(null, packs);
             } catch (Exception e) {

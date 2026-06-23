@@ -19,6 +19,7 @@ public class Sticker implements Parcelable {
     public final String accessibilityText;
     public long size;
     public String validationError; // transient, set by validator
+    public boolean isAnimated = false;
 
     public Sticker(String imageFileName, List<String> emojis, String accessibilityText) {
         this.imageFileName = imageFileName;
@@ -31,6 +32,7 @@ public class Sticker implements Parcelable {
         emojis = in.createStringArrayList();
         accessibilityText = in.readString();
         size = in.readLong();
+        isAnimated = in.readByte() != 0;
     }
 
     public static final Creator<Sticker> CREATOR = new Creator<Sticker>() {
@@ -53,6 +55,10 @@ public class Sticker implements Parcelable {
         this.emojis = emojis;
     }
 
+    public void setAnimated(boolean animated) {
+        this.isAnimated = animated;
+    }
+
     @Override
     public int describeContents() {
         return 0;
@@ -64,5 +70,6 @@ public class Sticker implements Parcelable {
         dest.writeStringList(emojis);
         dest.writeString(accessibilityText);
         dest.writeLong(size);
+        dest.writeByte((byte) (isAnimated ? 1 : 0));
     }
 }

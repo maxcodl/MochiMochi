@@ -32,12 +32,26 @@ class WhitelistCheck {
 
     static boolean isWhitelisted(@NonNull Context context, @NonNull String identifier) {
         try {
-            if (!isWhatsAppConsumerAppInstalled(context.getPackageManager()) && !isWhatsAppSmbAppInstalled(context.getPackageManager())) {
+            boolean consumerInstalled = isWhatsAppConsumerAppInstalled(context.getPackageManager());
+            boolean smbInstalled = isWhatsAppSmbAppInstalled(context.getPackageManager());
+
+            if (!consumerInstalled && !smbInstalled) {
                 return false;
             }
-            boolean consumerResult = isStickerPackWhitelistedInWhatsAppConsumer(context, identifier);
-            boolean smbResult = isStickerPackWhitelistedInWhatsAppSmb(context, identifier);
-            return consumerResult && smbResult;
+
+            boolean consumerResult = consumerInstalled && isStickerPackWhitelistedInWhatsAppConsumer(context, identifier);
+            boolean smbResult = smbInstalled && isStickerPackWhitelistedInWhatsAppSmb(context, identifier);
+
+            if (consumerResult || smbResult) {
+                return true;
+            }
+
+            // Fallback for chunked packs: check if the first chunk is whitelisted in WhatsApp
+            String chunk0Identifier = identifier + StickerPackChunkManager.CHUNK_SUFFIX + "0";
+            boolean consumerChunkResult = consumerInstalled && isStickerPackWhitelistedInWhatsAppConsumer(context, chunk0Identifier);
+            boolean smbChunkResult = smbInstalled && isStickerPackWhitelistedInWhatsAppSmb(context, chunk0Identifier);
+
+            return consumerChunkResult || smbChunkResult;
         } catch (Exception e) {
             return false;
         }
@@ -48,7 +62,6 @@ class WhitelistCheck {
         if (isPackageInstalled(whatsappPackageName, packageManager)) {
             final String whatsappProviderAuthority = whatsappPackageName + CONTENT_PROVIDER;
             final ProviderInfo providerInfo = packageManager.resolveContentProvider(whatsappProviderAuthority, PackageManager.GET_META_DATA);
-            // provider is not there. The WhatsApp app may be an old version.
             if (providerInfo == null) {
                 return false;
             }
@@ -59,9 +72,6 @@ class WhitelistCheck {
                     return whiteListResult == 1;
                 }
             }
-        } else {
-            //if app is not installed, then don't need to take into its whitelist info into account.
-            return true;
         }
         return false;
     }
@@ -69,7 +79,6 @@ class WhitelistCheck {
     static boolean isPackageInstalled(String packageName, PackageManager packageManager) {
         try {
             final ApplicationInfo applicationInfo = packageManager.getApplicationInfo(packageName, 0);
-            //noinspection SimplifiableIfStatement
             if (applicationInfo != null) {
                 return applicationInfo.enabled;
             } else {

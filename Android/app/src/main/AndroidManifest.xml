@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
+
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="com.kawai.mochi.StickerApplication"
@@ -19,26 +25,29 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Intent filter for .wasticker files (Full Sticker Packs) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.wasticker" />
+            </intent-filter>
+            <!-- Catch by MIME type for apps that share correctly -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/octet-stream" />
-                <data android:pathPattern=".*\\.wasticker" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/zip" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/x-zip-compressed" />
             </intent-filter>
         </activity>
+
         <activity
             android:name="com.kawai.mochi.StickerPackListActivity"
             android:exported="false" />
@@ -68,34 +77,52 @@
         <activity
             android:name="com.kawai.mochi.EditStickerPackActivity"
             android:exported="false" />
+
+        <activity
+            android:name="com.kawai.mochi.MergeStickerPacksActivity"
+            android:exported="false"
+            android:label="@string/merge_packs_title"
+            android:parentActivityName="com.kawai.mochi.StickerPackListActivity" />
+
+        <activity
+            android:name="com.kawai.mochi.TelegramImportActivity"
+            android:exported="false"
+            android:label="@string/telegram_import_title"
+            android:parentActivityName="com.kawai.mochi.StickerPackListActivity" />
+
+        <activity
+            android:name="com.kawai.mochi.ConversionTasksActivity"
+            android:exported="false"
+            android:label="@string/telegram_conversion_tasks_title"
+            android:parentActivityName="com.kawai.mochi.StickerPackListActivity" />
+
+        <service
+            android:name="com.kawai.mochi.TelegramConversionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+
         <activity
             android:name="com.kawai.mochi.ImportIndividualStickerActivity"
             android:exported="true">
+            <!-- Intent filter for .idwasticker files (Individual Stickers) -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:host="*" />
+                <data android:mimeType="*/*" />
                 <data android:pathPattern=".*\\.idwasticker" />
             </intent-filter>
+            <!-- Catch by MIME type for individual stickers -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="application/octet-stream" />
-                <data android:pathPattern=".*\\.wasticker" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" />
-                <data android:pathPattern=".*\\.wst" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="image/webp" />
             </intent-filter>
         </activity>
@@ -107,6 +134,16 @@
             android:exported="true"
             android:grantUriPermissions="true"
             android:readPermission="com.whatsapp.sticker.READ" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
     <queries>

@@ -23,33 +23,56 @@ import com.kawai.mochi.R;
 
 import java.util.List;
 
-public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackListItemViewHolder> {
-    @NonNull
-    private List<StickerPack> stickerPacks;
+import androidx.recyclerview.widget.ListAdapter;
+import androidx.recyclerview.widget.DiffUtil;
+
+public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPackListItemViewHolder> {
     @NonNull
     private final OnAddButtonClickedListener onAddButtonClickedListener;
     private int maxNumberOfStickersInARow;
     private int minMarginBetweenImages;
     private boolean isScrolling;
+    
     private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
-    // Cache so we don't hit SharedPreferences on every bind
     Boolean animationsEnabledCache = null;
 
-    StickerPackListAdapter(@NonNull List<StickerPack> stickerPacks, @NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
-        this.stickerPacks = stickerPacks;
+    StickerPackListAdapter(@NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
+        super(new DiffUtil.ItemCallback<StickerPack>() {
+            @Override
+            public boolean areItemsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
+                return oldItem.identifier.equals(newItem.identifier);
+            }
+
+            @Override
+            public boolean areContentsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
+                // If anything that affects UI changes, return false
+                if (!oldItem.name.equals(newItem.name)) return false;
+                if (!oldItem.publisher.equals(newItem.publisher)) return false;
+                if (oldItem.getTotalSize() != newItem.getTotalSize()) return false;
+                if (oldItem.getIsWhitelisted() != newItem.getIsWhitelisted()) return false;
+                int oldCount = oldItem.getStickers() != null ? oldItem.getStickers().size() : 0;
+                int newCount = newItem.getStickers() != null ? newItem.getStickers().size() : 0;
+                if (oldCount != newCount) return false;
+                return true;
+            }
+        });
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
-        // Performance: Increase pool size to hold enough views for ~5 visible rows
-        sharedPool.setMaxRecycledViews(0, 25);
+        // Keep the nested preview pool modest to avoid bitmap/view churn.
+        sharedPool.setMaxRecycledViews(0, 8);
     }
 
     public void setScrolling(boolean isScrolling) {
-        this.isScrolling = isScrolling;
+        if (this.isScrolling != isScrolling) {
+            this.isScrolling = isScrolling;
+            // Efficiently notify only about the scroll state change
+            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
+        }
     }
 
     @Override
     public long getItemId(int position) {
-        return stickerPacks.get(position).identifier.hashCode();
+        return getItem(position).identifier.hashCode();
     }
 
     @NonNull
@@ -59,15 +82,24 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         final LayoutInflater layoutInflater = LayoutInflater.from(context);
         final View stickerPackRow = layoutInflater.inflate(R.layout.sticker_packs_list_item, viewGroup, false);
         StickerPackListItemViewHolder vh = new StickerPackListItemViewHolder(stickerPackRow);
-        
-        // Performance: Use a shared pool for all horizontal preview lists
         vh.imageRowView.setRecycledViewPool(sharedPool);
         return vh;
     }
 
     @Override
+    public void onBindViewHolder(@NonNull StickerPackListItemViewHolder holder, int position, @NonNull List<Object> payloads) {
+        if (payloads.contains("scroll_state_change")) {
+            if (holder.previewAdapter != null) {
+                holder.previewAdapter.setScrolling(isScrolling);
+            }
+        } else {
+            super.onBindViewHolder(holder, position, payloads);
+        }
+    }
+
+    @Override
     public void onBindViewHolder(@NonNull final StickerPackListItemViewHolder viewHolder, final int index) {
-        StickerPack pack = stickerPacks.get(index);
+        StickerPack pack = getItem(index);
         final Context context = viewHolder.titleView.getContext();
 
         int count = pack.getStickers() != null ? pack.getStickers().size() : 0;
@@ -95,21 +127,20 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
             final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
             int numToShow = Math.min(maxNumberOfStickersInARow, pack.getStickers().size());
             List<Sticker> previewStickers = pack.getStickers().subList(0, numToShow);
+            
             if (animationsEnabledCache == null) {
                 animationsEnabledCache = SettingsActivity.isAnimationsEnabled(context);
             }
             boolean animationsEnabled = animationsEnabledCache;
 
             if (viewHolder.previewAdapter != null) {
-                // Reuse existing adapter — Fresco keeps images in memory cache,
-                // so scrolling back to a seen item costs nothing.
                 viewHolder.previewAdapter.updateData(previewStickers, pack.identifier,
                         previewSize, minMarginBetweenImages,
                         pack.animatedStickerPack, animationsEnabled, isScrolling);
             } else {
                 StickerPreviewAdapter adapter = new StickerPreviewAdapter(
                         previewStickers, pack.identifier, previewSize,
-                        minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled);
+                        minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled, false, null);
                 adapter.setScrolling(isScrolling);
                 viewHolder.previewAdapter = adapter;
                 viewHolder.imageRowView.setAdapter(adapter);
@@ -134,24 +165,14 @@ public class StickerPackListAdapter extends RecyclerView.Adapter<StickerPackList
         }
     }
 
-    @Override
-    public int getItemCount() {
-        return stickerPacks.size();
-    }
-
     void setImageRowSpec(int maxNumberOfStickersInARow, int minMarginBetweenImages) {
         this.minMarginBetweenImages = minMarginBetweenImages;
         if (this.maxNumberOfStickersInARow != maxNumberOfStickersInARow) {
             this.maxNumberOfStickersInARow = maxNumberOfStickersInARow;
-            notifyDataSetChanged();
+            notifyItemRangeChanged(0, getItemCount());
         }
     }
 
-    void setStickerPackList(List<StickerPack> stickerPackList) {
-        this.stickerPacks = stickerPackList;
-    }
-
-    /** Call when the animations setting changes so the next bind picks up the new value. */
     void invalidateAnimationsCache() {
         animationsEnabledCache = null;
     }

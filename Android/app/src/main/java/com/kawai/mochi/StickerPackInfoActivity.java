@@ -5,25 +5,22 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.text.TextUtils;
 import android.text.format.Formatter;
-import android.util.Log;
 import android.view.View;
-import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.recyclerview.widget.DividerItemDecoration;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.drawee.interfaces.DraweeController;
+import com.facebook.drawee.view.SimpleDraweeView;
 import com.google.android.material.tabs.TabLayout;
 import com.kawai.mochi.R;
 
-import java.io.FileNotFoundException;
-import java.io.InputStream;
 import java.util.List;
 
 public class StickerPackInfoActivity extends BaseActivity {
-
-    private static final String TAG = "StickerPackInfoActivity";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -46,7 +43,6 @@ public class StickerPackInfoActivity extends BaseActivity {
         final String email             = getIntent().getStringExtra(StickerPackDetailsActivity.EXTRA_STICKER_PACK_EMAIL);
         final String privacyPolicy     = getIntent().getStringExtra(StickerPackDetailsActivity.EXTRA_STICKER_PACK_PRIVACY_POLICY);
         final String licenseAgreement  = getIntent().getStringExtra(StickerPackDetailsActivity.EXTRA_STICKER_PACK_LICENSE_AGREEMENT);
-        final int stickerCount         = getIntent().getIntExtra(StickerPackDetailsActivity.EXTRA_STICKER_PACK_STICKER_COUNT, 0);
         final long totalSize           = getIntent().getLongExtra(StickerPackDetailsActivity.EXTRA_STICKER_PACK_TOTAL_SIZE, 0);
         final StickerPack stickerPack  = getIntent().getParcelableExtra(StickerPackDetailsActivity.EXTRA_STICKER_PACK_DATA);
 
@@ -70,17 +66,15 @@ public class StickerPackInfoActivity extends BaseActivity {
             @Override public void onTabReselected(TabLayout.Tab tab) {}
         });
 
-        // ── Tray image ──
-        ImageView trayImageView = findViewById(R.id.info_tray_image);
+        // ── Tray image (using Fresco to avoid main thread lag) ──
+        SimpleDraweeView trayImageView = findViewById(R.id.info_tray_image);
         if (!TextUtils.isEmpty(trayIconUriString)) {
-            try {
-                Uri trayUri = Uri.parse(trayIconUriString);
-                InputStream inputStream = getContentResolver().openInputStream(trayUri);
-                android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeStream(inputStream);
-                trayImageView.setImageBitmap(bmp);
-            } catch (FileNotFoundException e) {
-                Log.e(TAG, "Could not find tray icon: " + trayIconUriString);
-            }
+            boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(this);
+            DraweeController controller = Fresco.newDraweeControllerBuilder()
+                    .setUri(Uri.parse(trayIconUriString))
+                    .setAutoPlayAnimations(animationsEnabled)
+                    .build();
+            trayImageView.setController(controller);
         }
 
         // ── Pack Summary Fields ──

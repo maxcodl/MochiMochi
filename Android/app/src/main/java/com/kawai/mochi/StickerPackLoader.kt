@@ -5,30 +5,30 @@ import android.content.Context
 import android.net.Uri
 import android.text.TextUtils
 import android.util.Log
+import androidx.documentfile.provider.DocumentFile
 import com.kawai.mochi.BuildConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.IOException
 
 object StickerPackLoader {
     private const val TAG = "StickerPackLoader"
+    private const val METADATA = "metadata"
 
-    /**
-     * For Java compatibility: provides a blocking way to fetch sticker packs.
-     */
     @JvmStatic
     fun fetchStickerPacks(context: Context): ArrayList<StickerPack> = runBlocking {
         ArrayList(fetchStickerPacksAsync(context))
     }
 
-    /**
-     * Fetch sticker packs using Coroutines to avoid blocking the UI thread.
-     */
+    @JvmStatic
+    fun fetchStickerPack(context: Context, identifier: String): StickerPack? = runBlocking {
+        fetchStickerPackAsync(context, identifier)
+    }
+
     suspend fun fetchStickerPacksAsync(context: Context): List<StickerPack> = withContext(Dispatchers.IO) {
         val cursor = context.contentResolver.query(StickerContentProvider.AUTHORITY_URI, null, null, null, null)
-            ?: throw IllegalStateException("could not fetch from content provider, ${BuildConfig.CONTENT_PROVIDER_AUTHORITY}")
+            ?: throw IllegalStateException("could not fetch from content provider")
 
         val identifierSet = HashSet<String>()
         val stickerPackList = fetchFromContentProvider(cursor)
@@ -44,32 +44,87 @@ object StickerPackLoader {
             }
         }
 
-        dedupedList.forEach { stickerPack ->
-            try {
-                val stickers = getStickersForPack(context, stickerPack)
-                stickerPack.setStickers(stickers)
-                StickerPackValidator.verifyStickerPackValidity(context, stickerPack)
-            } catch (e: Exception) {
-                Log.w(TAG, "Skipping invalid pack '${stickerPack.name}': ${e.message}")
+        val rootPath = WastickerParser.getStickerFolderPath(context)
+        val isSAF = WastickerParser.isCustomPathUri(context)
+        
+        // Pre-fetch directory map for SAF to avoid repeated lookups
+        val packDirsMap = if (isSAF) {
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath))
+            root?.listFiles()?.filter { it.isDirectory }?.associateBy { it.name }
+        } else null
+
+        // Parallelize fetching stickers and sizes
+        val deferreds = dedupedList.map { stickerPack ->
+            async {
+                try {
+                    val stickers = fetchFromContentProviderForStickers(stickerPack.identifier, context.contentResolver)
+                    // Re-introduced size population with optimizations
+                    populateStickerSizes(context, stickerPack.identifier, stickers, stickerPack.animatedStickerPack, packDirsMap?.get(stickerPack.identifier))
+                    stickerPack.setStickers(stickers)
+                    stickers.forEach { it.isAnimated = stickerPack.animatedStickerPack }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Skipping invalid pack '${stickerPack.name}': ${e.message}")
+                }
             }
         }
+        deferreds.awaitAll()
         dedupedList
     }
 
-    private fun getStickersForPack(context: Context, stickerPack: StickerPack): List<Sticker> {
-        val stickers = fetchFromContentProviderForStickers(stickerPack.identifier, context.contentResolver)
-        stickers.forEach { sticker ->
-            try {
-                val bytes = fetchStickerAsset(stickerPack.identifier, sticker.imageFileName, context.contentResolver)
-                if (bytes.isEmpty()) {
-                    throw IllegalStateException("Asset file is empty, pack: ${stickerPack.name}, sticker: ${sticker.imageFileName}")
-                }
-                sticker.setSize(bytes.size.toLong())
+    suspend fun fetchStickerPackAsync(context: Context, identifier: String): StickerPack? = withContext(Dispatchers.IO) {
+        val uri = Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT)
+            .authority(BuildConfig.CONTENT_PROVIDER_AUTHORITY)
+            .appendPath(METADATA)
+            .appendPath(identifier)
+            .build()
+
+        val cursor = context.contentResolver.query(uri, null, null, null, null) ?: return@withContext null
+        cursor.use {
+            val pack = fetchFromContentProvider(it).firstOrNull() ?: return@withContext null
+            return@withContext try {
+                val stickers = fetchFromContentProviderForStickers(pack.identifier, context.contentResolver)
+                populateStickerSizes(context, pack.identifier, stickers, pack.animatedStickerPack)
+                pack.setStickers(stickers)
+                pack
             } catch (e: Exception) {
-                throw IllegalStateException("Asset file doesn't exist. pack: ${stickerPack.name}, sticker: ${sticker.imageFileName}", e)
+                Log.w(TAG, "Skipping invalid imported pack '$identifier': ${e.message}")
+                null
             }
         }
-        return stickers
+    }
+
+    fun populateStickerSizes(context: Context, identifier: String, stickers: List<Sticker>, isAnimatedPack: Boolean, packDirDoc: DocumentFile? = null) {
+        if (stickers.isEmpty()) return
+
+        val rootPath = WastickerParser.getStickerFolderPath(context)
+        if (!WastickerParser.isCustomPathUri(context)) {
+            val packDir = File(File(rootPath), identifier)
+            stickers.forEach { sticker ->
+                val file = File(packDir, sticker.imageFileName)
+                if (file.exists()) sticker.setSize(file.length())
+                sticker.isAnimated = isAnimatedPack
+            }
+            return
+        }
+
+        try {
+            val packDir = packDirDoc ?: run {
+                val root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath))
+                root?.findFile(identifier)
+            } ?: return
+            
+            val sizeMap = HashMap<String, Long>()
+            for (file in packDir.listFiles()) {
+                val name = file.name
+                if (name != null && !file.isDirectory) sizeMap[name] = file.length()
+            }
+            stickers.forEach { sticker ->
+                sticker.setSize(sizeMap[sticker.imageFileName] ?: 0L)
+                sticker.isAnimated = isAnimatedPack
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to populate sizes for SAF pack: $identifier", e)
+        }
     }
 
     private fun fetchFromContentProvider(cursor: android.database.Cursor): List<StickerPack> {
@@ -130,9 +185,7 @@ object StickerPackLoader {
     @Throws(IOException::class)
     fun fetchStickerAsset(identifier: String, name: String, contentResolver: ContentResolver): ByteArray {
         contentResolver.openInputStream(getStickerAssetUri(identifier, name)).use { inputStream ->
-            if (inputStream == null) {
-                throw IOException("cannot read sticker asset:$identifier/$name")
-            }
+            if (inputStream == null) throw IOException("cannot read sticker asset:$identifier/$name")
             val buffer = ByteArrayOutputStream()
             val data = ByteArray(16384)
             var read: Int
@@ -140,6 +193,17 @@ object StickerPackLoader {
                 buffer.write(data, 0, read)
             }
             return buffer.toByteArray()
+        }
+    }
+
+    @JvmStatic
+    @Throws(IOException::class)
+    fun fetchStickerAssetLength(identifier: String, name: String, contentResolver: ContentResolver): Long {
+        val uri = getStickerAssetUri(identifier, name)
+        return try {
+            contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
+        } catch (e: Exception) {
+            0L
         }
     }
 

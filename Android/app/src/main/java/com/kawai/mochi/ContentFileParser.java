@@ -9,8 +9,10 @@ package com.kawai.mochi;
 
 import android.text.TextUtils;
 import android.util.JsonReader;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,20 +21,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 class ContentFileParser {
-
+    private static final String TAG = "ContentFileParser";
     private static final String FIELD_STICKER_IMAGE_FILE = "image_file";
     private static final String FIELD_STICKER_EMOJIS = "emojis";
     private static final String FIELD_STICKER_ACCESSIBILITY_TEXT = "accessibility_text";
 
     @NonNull
-    static List<StickerPack> parseStickerPacks(@NonNull InputStream contentsInputStream) throws IOException, IllegalStateException {
+    static List<StickerPack> parseStickerPacks(@NonNull InputStream contentsInputStream) throws IOException {
         try (JsonReader reader = new JsonReader(new InputStreamReader(contentsInputStream))) {
             return readStickerPacks(reader);
         }
     }
 
     @NonNull
-    private static List<StickerPack> readStickerPacks(@NonNull JsonReader reader) throws IOException, IllegalStateException {
+    private static List<StickerPack> readStickerPacks(@NonNull JsonReader reader) throws IOException {
         List<StickerPack> stickerPackList = new ArrayList<>();
         String androidPlayStoreLink = null;
         String iosAppStoreLink = null;
@@ -47,7 +49,9 @@ class ContentFileParser {
                 reader.beginArray();
                 while (reader.hasNext()) {
                     StickerPack stickerPack = readStickerPack(reader);
-                    stickerPackList.add(stickerPack);
+                    if (stickerPack != null) {
+                        stickerPackList.add(stickerPack);
+                    }
                 }
                 reader.endArray();
             } else {
@@ -63,8 +67,8 @@ class ContentFileParser {
         return stickerPackList;
     }
 
-    @NonNull
-    private static StickerPack readStickerPack(@NonNull JsonReader reader) throws IOException, IllegalStateException {
+    @Nullable
+    private static StickerPack readStickerPack(@NonNull JsonReader reader) throws IOException {
         reader.beginObject();
         String identifier = null;
         String name = null;
@@ -81,83 +85,52 @@ class ContentFileParser {
         while (reader.hasNext()) {
             String key = reader.nextName();
             switch (key) {
-                case "identifier":
-                    identifier = reader.nextString();
-                    break;
-                case "name":
-                    name = reader.nextString();
-                    break;
-                case "publisher":
-                    publisher = reader.nextString();
-                    break;
-                case "tray_image_file":
-                    trayImageFile = reader.nextString();
-                    break;
-                case "publisher_email":
-                    publisherEmail = reader.nextString();
-                    break;
-                case "publisher_website":
-                    publisherWebsite = reader.nextString();
-                    break;
-                case "privacy_policy_website":
-                    privacyPolicyWebsite = reader.nextString();
-                    break;
-                case "license_agreement_website":
-                    licenseAgreementWebsite = reader.nextString();
-                    break;
-                case "stickers":
-                    stickerList = readStickers(reader);
-                    break;
-                case "image_data_version":
-                    imageDataVersion = reader.nextString();
-                    break;
-                case "avoid_cache":
-                    avoidCache = reader.nextBoolean();
-                    break;
-                case "animated_sticker_pack":
-                    animatedStickerPack = reader.nextBoolean();
-                    break;
-                default:
-                    reader.skipValue();
+                case "identifier": identifier = reader.nextString(); break;
+                case "name": name = reader.nextString(); break;
+                case "publisher": publisher = reader.nextString(); break;
+                case "tray_image_file": trayImageFile = reader.nextString(); break;
+                case "publisher_email": publisherEmail = reader.nextString(); break;
+                case "publisher_website": publisherWebsite = reader.nextString(); break;
+                case "privacy_policy_website": privacyPolicyWebsite = reader.nextString(); break;
+                case "license_agreement_website": licenseAgreementWebsite = reader.nextString(); break;
+                case "stickers": stickerList = readStickers(reader); break;
+                case "image_data_version": imageDataVersion = reader.nextString(); break;
+                case "avoid_cache": avoidCache = reader.nextBoolean(); break;
+                case "animated_sticker_pack": animatedStickerPack = reader.nextBoolean(); break;
+                default: reader.skipValue();
             }
         }
-        if (TextUtils.isEmpty(identifier)) {
-            throw new IllegalStateException("identifier cannot be empty");
-        }
-        if (TextUtils.isEmpty(name)) {
-            throw new IllegalStateException("name cannot be empty");
-        }
-        if (TextUtils.isEmpty(publisher)) {
-            throw new IllegalStateException("publisher cannot be empty");
-        }
-        if (TextUtils.isEmpty(trayImageFile)) {
-            throw new IllegalStateException("tray_image_file cannot be empty");
+        reader.endObject();
+
+        if (TextUtils.isEmpty(identifier) || TextUtils.isEmpty(name) || TextUtils.isEmpty(publisher) || TextUtils.isEmpty(trayImageFile)) {
+            Log.e(TAG, "Identifier, name, publisher, or tray_image_file is empty for " + identifier);
+            return null;
         }
         if (stickerList == null || stickerList.isEmpty()) {
-            throw new IllegalStateException("sticker list is empty");
+            Log.e(TAG, "Sticker list is empty for " + identifier);
+            return null;
         }
         if (identifier.contains("..") || identifier.contains("/")) {
-            throw new IllegalStateException("identifier should not contain .. or / to prevent directory traversal");
+            Log.e(TAG, "Identifier contains invalid characters: " + identifier);
+            return null;
         }
         if (TextUtils.isEmpty(imageDataVersion)) {
-            throw new IllegalStateException("image_data_version should not be empty");
+            imageDataVersion = "1";
         }
-        reader.endObject();
         final StickerPack stickerPack = new StickerPack(identifier, name, publisher, trayImageFile, publisherEmail, publisherWebsite, privacyPolicyWebsite, licenseAgreementWebsite, imageDataVersion, avoidCache, animatedStickerPack);
         stickerPack.setStickers(stickerList);
         return stickerPack;
     }
 
     @NonNull
-    private static List<Sticker> readStickers(@NonNull JsonReader reader) throws IOException, IllegalStateException {
+    private static List<Sticker> readStickers(@NonNull JsonReader reader) throws IOException {
         reader.beginArray();
         List<Sticker> stickerList = new ArrayList<>();
-
         while (reader.hasNext()) {
             reader.beginObject();
             String imageFile = null;
             String accessibilityText = null;
-            List<String> emojis = new ArrayList<>(StickerPackValidator.EMOJI_MAX_LIMIT);
+            List<String> emojis = new ArrayList<>();
             while (reader.hasNext()) {
                 final String key = reader.nextName();
                 if (FIELD_STICKER_IMAGE_FILE.equals(key)) {
@@ -178,19 +151,11 @@ class ContentFileParser {
                 }
             }
             reader.endObject();
-            if (imageFile == null || TextUtils.isEmpty(imageFile)) {
-                throw new IllegalStateException("sticker image_file cannot be empty");
+            if (imageFile != null && !TextUtils.isEmpty(imageFile) && imageFile.endsWith(".webp") && !imageFile.contains("..") && !imageFile.contains("/")) {
+                stickerList.add(new Sticker(imageFile, emojis, accessibilityText));
             }
-            if (!imageFile.endsWith(".webp")) {
-                throw new IllegalStateException("image file for stickers should be webp files, image file is: " + imageFile);
-            }
-            if (imageFile.contains("..") || imageFile.contains("/")) {
-                throw new IllegalStateException("the file name should not contain .. or / to prevent directory traversal, image file is:" + imageFile);
-            }
-            stickerList.add(new Sticker(imageFile, emojis, accessibilityText));
         }
         reader.endArray();
         return stickerList;
     }
-
 }

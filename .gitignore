@@ -111,3 +111,4 @@ out/
 *.tsbuildinfo
 DerivedData/
 keystore_base64.txt
+Path.py

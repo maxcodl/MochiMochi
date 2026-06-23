@@ -43,6 +43,7 @@
     <string name="edit_author_hint">Author name</string>
     <string name="add_sticker">+ Add Sticker(s)</string>
     <string name="save">Save</string>
+    <string name="save_button">Save</string>
     <string name="remove_sticker">Remove sticker</string>
     <string name="saving">Saving…</string>
     <string name="edit_saved">Changes saved</string>
@@ -81,6 +82,9 @@
     <string name="later">Later</string>
     <string name="select_wasticker_file">Select .wasticker file</string>
     <string name="import_error">Import error: %s</string>
+    <string name="importing_pack">Importing sticker pack…</string>
+    <string name="import_progress">Importing sticker %1$d of %2$d…</string>
+    <string name="validation_progress">Validating sticker %1$d of %2$d…</string>
     <string name="pack_imported">✓ Pack imported!</string>
     <string name="error_with_message">Error: %s</string>
     <string name="pack_deleted">Pack deleted</string>
@@ -117,7 +121,7 @@
     <!-- Sticker Audit Types -->
     <string name="animated">ANIMATED</string>
     <string name="lossless">LOSSLESS</string>
-    <string name="lossy">LOSSY</string>
+    <string name="lossy">STATIC</string>
 
     <!-- Validation Errors -->
     <string name="title_validation_error">Validation Error</string>
@@ -131,7 +135,7 @@
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
-    <string name="default_folder_display">Default (internal storage)</string>
+    <string name="default_folder_display">Default (Stickers/.MochiMochi)</string>
     <string name="reset_to_default_toast">Reset to default folder</string>
     <string name="no_packs_to_diagnose">No packs found to diagnose</string>
     <string name="diagnostics_pack_selection_title">Select Pack for Diagnostic</string>
@@ -148,7 +152,10 @@
     <string name="processing_stickers_title">Processing Stickers...</string>
     <string name="done">Done</string>
     <string name="copy_log">Copy Log</string>
-    <string name="repair_complete">Repair complete.</string>
+    <string name="advanced_logs">Advanced logs</string>
+    <string name="advanced_logs_title">Advanced conversion log</string>
+    <string name="hide_advanced_logs">Hide advanced logs</string>
+    <string name="export_button">Export</string>
     <string name="donate_title">❤️ Donate</string>
     <string name="donate_message">I know u poor so send your kidney to Max ❤️</string>
     <string name="donate_positive">Gladly 💌</string>
@@ -183,4 +190,97 @@
     <string name="pack_count_format">%1$s (%2$d/30)</string>
     <string name="error_cannot_open_file">Cannot open file</string>
     <string name="imported_pack_default_title">Imported Pack</string>
+    <string name="error_invalid_file_type">Invalid file type. Only .wasticker and .idwasticker files are supported.</string>
+
+    <!-- Merge Packs -->
+    <string name="merge_packs_menu_item">Merge Packs…</string>
+    <string name="merge_packs_title">Merge Packs</string>
+    <string name="merge_packs_hint">Select 2 or more packs. Up to 30 stickers will be kept.</string>
+    <string name="merge_sticker_count_label">Stickers in merged pack</string>
+    <string name="merge_over_limit">Will be trimmed to 30</string>
+    <string name="merge_button_label">Merge</string>
+    <string name="merge_need_two_packs">Select at least 2 packs to merge</string>
+    <string name="merge_confirm">Merge %1$d stickers from %2$d packs into a new pack?</string>
+    <string name="merge_confirm_capped">Merge into a new pack? Only the first %1$d stickers will be kept (%2$d stickers will be dropped due to WhatsApp\'s 30-sticker limit).</string>
+    <string name="merge_in_progress">Merging packs…</string>
+    <string name="merge_success">Packs merged successfully!</string>
+    <string name="merge_mixed_types_error">Cannot mix animated and static packs</string>
+    <string name="pack_type_animated">Animated</string>
+    <string name="pack_type_static">Static</string>
+
+    <!-- Telegram Import -->
+    <string name="import_stickers_title">Import Stickers</string>
+    <string name="import_from_file">Import from file</string>
+    <string name="import_from_telegram">Import from Telegram</string>
+    <string name="telegram_import_title">Import from Telegram</string>
+    <string name="telegram_url_hint">t.me/addstickers/PackName</string>
+    <string name="telegram_author_hint">Author name</string>
+    <string name="telegram_author_default">Maxcodl</string>
+    <string name="telegram_pack_name_hint">Pack name</string>
+    <string name="convert_button">Convert</string>
+    <string name="telegram_conversion_notif_channel_name">Telegram Conversion</string>
+    <string name="telegram_conversion_notif_channel_desc">Background Telegram sticker conversion tasks</string>
+    <string name="telegram_conversion_notif_title">Converting stickers</string>
+    <string name="telegram_conversion_notif_queued">Task queued</string>
+    <string name="telegram_conversion_notif_running">Background conversion running</string>
+    <string name="telegram_conversion_notif_progress">Converting %1$d / %2$d</string>
+    <string name="telegram_conversion_notif_done_title">Conversion completed</string>
+    <string name="telegram_conversion_notif_done_text">%1$d pack(s) ready</string>
+    <string name="telegram_conversion_notif_failed_title">Conversion failed</string>
+    <string name="telegram_conversion_tasks_title">Conversion Tasks</string>
+    <string name="telegram_conversion_tasks_empty">No conversion tasks yet.</string>
+    <string name="telegram_conversion_open_task">Open Conversion</string>
+    <string name="telegram_conversion_task_queued">Queued</string>
+    <string name="telegram_conversion_task_running">Running (%1$d/%2$d)</string>
+    <string name="telegram_conversion_task_done">Done (%1$d packs)</string>
+    <string name="telegram_conversion_task_failed">Failed: %1$s</string>
+    <string name="log_card_title">Conversion log</string>
+    <string name="results_title">Imported packs</string>
+    <string name="static_badge">Static</string>
+    <string name="animated_badge">Animated</string>
+    <string name="tg_fetching_label">Fetching pack info…</string>
+    <string name="tg_progress_label">Converting sticker %1$d / %2$d…</string>
+    <string name="animated_not_supported_title">Animated stickers skipped</string>
+    <string name="animated_not_supported_message">%d animated sticker(s) were skipped — the on-device converter only supports static stickers. Use the Python bot for animated packs.</string>
+    <string name="animated_not_supported_all_message">This pack contains only animated stickers, which are not supported by the on-device converter. Use the Python bot to convert animated packs.</string>
+
+    <!-- Telegram Bot Token Configuration -->
+    <string name="settings_telegram_import_label">TELEGRAM BOT TOKEN</string>
+    <string name="telegram_bot_token_title">Set Telegram Bot Token</string>
+    <string name="telegram_bot_token_description">Enter your Telegram Bot API token. You can create one at https://t.me/BotFather. The token will be securely stored on your device.</string>
+    <string name="telegram_bot_token_hint">123456789:ABCdef...</string>
+    <string name="telegram_bot_token_not_configured">Configure Bot Token</string>
+    <string name="telegram_bot_token_configured">Bot Token</string>
+    <string name="telegram_bot_token_manage">Manage Bot Token</string>
+    <string name="telegram_bot_token_change">Change Token</string>
+    <string name="telegram_bot_token_remove">Remove Token</string>
+    <string name="telegram_bot_token_enter_new">Enter new Telegram Bot Token</string>
+    <string name="telegram_bot_token_confirm_remove">Are you sure you want to remove the bot token? You\'ll need to add it again to import stickers from Telegram.</string>
+    <string name="telegram_bot_token_saved">Bot token saved successfully!</string>
+    <string name="telegram_bot_token_removed">Bot token removed.</string>
+    <string name="telegram_bot_token_required">Bot token is required to import stickers from Telegram.</string>
+    <string name="telegram_bot_token_first_use">To import stickers from Telegram, first configure your bot token in Settings.</string>
+    <string name="telegram_bot_token_invalid_title">Invalid Token Format</string>
+    <string name="telegram_bot_token_invalid_message">The token format is invalid. Please check your token and try again. Format: 123456789:ABCdef...</string>
+
+    <!-- Conversion Dialogs -->
+    <string name="cancel_conversion_title">Cancel Conversion?</string>
+    <string name="cancel_conversion_message">Are you sure you want to cancel the conversion? Progress will be lost.</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="retry">Retry</string>
+    <string name="confirm">Confirm</string>
+    <string name="repair_complete">Repair process complete!</string>
+    <string name="pack_too_small_skipped">Pack has fewer than 3 stickers — skipped</string>
+
+    <plurals name="sticker_count_plural">
+        <item quantity="one">%d sticker</item>
+        <item quantity="other">%d stickers</item>
+    </plurals>
+
+    <!-- Multi-chunk "Add to WhatsApp" flow (packs with >30 stickers) -->
+    <string name="chunk_add_start">This pack has more than 30 stickers. WhatsApp allows max 30 per pack, so it will be split into %d parts.\n\nTap "Add" on each WhatsApp prompt to add all parts.</string>
+    <string name="chunk_add_progress">Adding part %1$d of %2$d to WhatsApp…</string>
+    <string name="chunk_add_cancelled">Add to WhatsApp cancelled. %d part(s) were not added. Tap "Add to WhatsApp" again to retry.</string>
+    <string name="chunk_add_complete">✓ All parts added to WhatsApp!</string>
 </resources>

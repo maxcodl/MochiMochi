@@ -31,8 +31,7 @@ class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
 
     StickerPackListItemViewHolder(final View itemView) {
         super(itemView);
-        // We use a specific overlay view for the detail click to ensure it covers
-        // child views like the image list without them intercepting the touch.
+        // FIX: Point to the overlay area that covers the entire card
         View detailsArea = itemView.findViewById(R.id.details_clickable_area);
         container = (detailsArea != null) ? detailsArea : itemView;
 

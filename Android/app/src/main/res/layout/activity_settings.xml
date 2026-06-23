@@ -147,6 +147,29 @@
                 android:layout_marginBottom="24dp"
                 tools:checked="false" />
 
+            <!-- Telegram Import Section -->
+            <TextView
+                style="@style/SettingsHeaderStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_telegram_import_label" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/telegram_bot_token_button"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/telegram_bot_token_not_configured"
+                android:layout_marginBottom="8dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/view_conversions_button"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/telegram_conversion_tasks_title"
+                android:layout_marginBottom="24dp" />
+
             <!-- Diagnostics Section -->
             <TextView
                 style="@style/SettingsHeaderStyle"

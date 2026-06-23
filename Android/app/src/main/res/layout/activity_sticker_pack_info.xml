@@ -40,23 +40,24 @@
         </com.google.android.material.tabs.TabLayout>
     </com.google.android.material.appbar.AppBarLayout>
 
-    <androidx.core.widget.NestedScrollView
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
-        <LinearLayout
+        <!-- ──── Summary View (Scrollable) ──── -->
+        <androidx.core.widget.NestedScrollView
+            android:id="@+id/summary_container"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:visibility="visible">
 
-            <!-- ──── Summary View ──── -->
             <LinearLayout
-                android:id="@+id/summary_container"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical">
+                android:orientation="vertical"
+                android:padding="16dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -65,13 +66,12 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
 
-                    <ImageView
+                    <com.facebook.drawee.view.SimpleDraweeView
                         android:id="@+id/info_tray_image"
                         android:layout_width="64dp"
                         android:layout_height="64dp"
-                        android:adjustViewBounds="true"
                         android:contentDescription="@string/info_screen_tray_icon"
-                        tools:src="@mipmap/ic_launcher_round" />
+                        app:placeholderImage="@mipmap/ic_launcher_round" />
 
                     <LinearLayout
                         android:layout_width="0dp"
@@ -279,36 +279,35 @@
                         tools:visibility="visible" />
                 </LinearLayout>
             </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
 
-            <!-- ──── Detailed List View ──── -->
-            <LinearLayout
-                android:id="@+id/details_container"
+        <!-- ──── Detailed List View (Efficient RecyclerView) ──── -->
+        <LinearLayout
+            android:id="@+id/details_container"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/info_stickers_header"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:visibility="gone"
-                tools:visibility="visible">
+                android:layout_marginBottom="12dp"
+                android:letterSpacing="0.1"
+                android:textAllCaps="true"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="11sp"
+                tools:text="STICKER AUDIT (30)" />
 
-                <TextView
-                    android:id="@+id/info_stickers_header"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginBottom="12dp"
-                    android:letterSpacing="0.1"
-                    android:textAllCaps="true"
-                    android:textColor="?attr/colorOnSurfaceVariant"
-                    android:textSize="11sp"
-                    tools:text="STICKER AUDIT (30)" />
-
-                <androidx.recyclerview.widget.RecyclerView
-                    android:id="@+id/info_sticker_list"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:clipToPadding="false"
-                    android:nestedScrollingEnabled="false"
-                    tools:listitem="@layout/item_sticker_info" />
-            </LinearLayout>
-
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/info_sticker_list"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:clipToPadding="false"
+                tools:listitem="@layout/item_sticker_info" />
         </LinearLayout>
-    </androidx.core.widget.NestedScrollView>
+    </FrameLayout>
+
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
