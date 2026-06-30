@@ -200,24 +200,18 @@ public class WastickerParser {
     //  Thumbnail deletion / regeneration (public)
     // ------------------------------------------------------------------------
 
-    /**
-     * Deletes all thumbnails (files starting with "thumb_") inside a given pack.
-     */
     private static void deleteThumbnailsForPack(Context context, String packId) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             DocumentFile packDir = root != null ? root.findFile(packId) : null;
-            if (packDir != null) {
-                for (DocumentFile file : packDir.listFiles()) {
-                    if (file.getName() != null && file.getName().startsWith("thumb_")) {
-                        file.delete();
-                    }
+            if (packDir == null) return;
+            for (DocumentFile file : packDir.listFiles()) {
+                if (file.getName() != null && file.getName().startsWith("thumb_")) {
+                    file.delete();
                 }
+                
             }
-            // Also clear the internal-storage mirror used to speed up thumbnail
-            // loads on SD-card-backed SAF folders (see StickerContentProvider).
-            deleteRecursive(StickerContentProvider.getThumbMirrorDir(context, packId));
         } else {
             File packDir = new File(new File(rootPath), packId);
             if (!packDir.exists()) return;
@@ -229,9 +223,12 @@ public class WastickerParser {
                 }
             }
         }
+
+        // NEW: Clean up the local mirror cache for this pack
+        StickerContentProvider.deleteMirrorPack(context, packId);
     }
 
-    /**
+        /**
      * Regenerates all thumbnails for all packs, showing progress via callback.
      * Deletes any existing thumbnails first.
      */
@@ -322,11 +319,17 @@ public class WastickerParser {
                 if (staleMirror.exists()) staleMirror.delete();
             }
         } else {
+            // ─── Internal storage path ──────────────────────────────────
             File packDir = new File(new File(rootPath), packId);
             File original = new File(packDir, fileName);
             if (!original.exists()) return;
             File thumb = new File(packDir, thumbName);
             StickerProcessor.createThumbnail(original, thumb);
+
+            // 🔥 Also delete the mirror file (even though internal storage doesn't use
+            // the mirror by default, it's safe to clean up in case a mirror exists).
+            File staleMirror = new File(StickerContentProvider.getThumbMirrorDir(context, packId), thumbName);
+            if (staleMirror.exists()) staleMirror.delete();
         }
     }
 
@@ -766,6 +769,7 @@ public class WastickerParser {
     // ------------------------------------------------------------------------
 
     public static void deleteStickerPack(Context context, String identifier) throws IOException, JSONException {
+        // 1. Remove the pack from contents.json
         JSONObject masterRoot = getOrSeedMasterRoot(context);
         JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
         if (masterPacks == null) return;
@@ -773,19 +777,61 @@ public class WastickerParser {
         JSONArray updatedPacks = new JSONArray();
         for (int i = 0; i < masterPacks.length(); i++) {
             JSONObject pack = masterPacks.getJSONObject(i);
-            if (!pack.optString("identifier").equals(identifier)) updatedPacks.put(pack);
+            if (!pack.optString("identifier").equals(identifier)) {
+                updatedPacks.put(pack);
+            }
         }
 
         masterRoot.put("sticker_packs", updatedPacks);
         saveMasterContents(context, masterRoot);
 
+        // 2. Delete the physical folder (SAF or internal)
         String rootPath = getStickerFolderPath(context);
+        boolean success = true;
+
         if (isCustomPathUri(context)) {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
-            DocumentFile packDir = root != null ? root.findFile(identifier) : null;
-            if (packDir != null) packDir.delete();
+            if (root != null) {
+                DocumentFile packDir = root.findFile(identifier);
+                if (packDir != null && packDir.exists()) {
+                    if (!packDir.delete()) {
+                        Log.w(TAG, "SAF delete failed for pack: " + identifier);
+                        success = false;
+                    }
+                } else {
+                    Log.w(TAG, "Pack folder not found in SAF: " + identifier);
+                    success = false;
+                }
+            } else {
+                Log.w(TAG, "SAF root not accessible");
+                success = false;
+            }
         } else {
-            deleteRecursive(new File(new File(rootPath), identifier));
+            File packDir = new File(new File(rootPath), identifier);
+            if (packDir.exists()) {
+                deleteRecursive(packDir);
+                if (packDir.exists()) {
+                    Log.w(TAG, "Internal delete failed for pack: " + identifier);
+                    success = false;
+                }
+            } else {
+                Log.w(TAG, "Pack folder not found internally: " + identifier);
+                success = false;
+            }
+        }
+
+        // 3. Clean up the local thumbnail mirror cache
+        StickerContentProvider.deleteMirrorPack(context, identifier);
+
+        // 4. Invalidate in‑memory caches and refresh the UI
+        StickerContentProvider provider = StickerContentProvider.getInstance();
+        if (provider != null) {
+            provider.invalidateStickerPackList();
+        }
+        StickerUpdateManager.triggerUpdate();
+
+        if (!success) {
+            Log.w(TAG, "Physical folder deletion may have partially failed, but contents.json was updated.");
         }
     }
 

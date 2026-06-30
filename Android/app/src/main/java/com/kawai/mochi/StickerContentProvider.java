@@ -43,7 +43,8 @@ import java.util.Map;
 import java.util.Objects;
 
 public class StickerContentProvider extends ContentProvider {
-
+    
+    
     public static final String STICKER_PACK_IDENTIFIER_IN_QUERY = "sticker_pack_identifier";
     public static final String STICKER_PACK_NAME_IN_QUERY = "sticker_pack_name";
     public static final String STICKER_PACK_PUBLISHER_IN_QUERY = "sticker_pack_publisher";
@@ -90,6 +91,8 @@ public class StickerContentProvider extends ContentProvider {
 
     private List<StickerPack> stickerPackList;
     private Map<String, StickerPack> stickerPackMap = new LinkedHashMap<>();
+    private static final String TAG = "StickerContentProvider";
+
     private static StickerContentProvider instance;
 
     // SAF lookups (DocumentFile.findFile) are expensive IPC round-trips to the
@@ -246,6 +249,32 @@ public class StickerContentProvider extends ContentProvider {
             safPackFileCache.clear();
             return safCachedRoot;
         }
+    }
+
+    /**
+     * Deletes the local mirror directory for a given pack (thumbnails cached from SAF).
+     * Called when a pack is deleted or when thumbnails are regenerated.
+     */
+    public static void deleteMirrorPack(Context context, String packId) {
+        File mirrorRoot = new File(context.getCacheDir(), "thumb_mirror");
+        if (!mirrorRoot.exists()) return;
+        File packMirror = new File(mirrorRoot, packId);
+        if (packMirror.exists()) {
+            deleteRecursive(packMirror);
+            Log.d("StickerContentProvider", "Deleted mirror cache for pack: " + packId);
+        }
+    }
+
+    private static void deleteRecursive(File fileOrDir) {
+        if (fileOrDir.isDirectory()) {
+            File[] children = fileOrDir.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursive(child);
+                }
+            }
+        }
+        fileOrDir.delete();
     }
 
     /**
