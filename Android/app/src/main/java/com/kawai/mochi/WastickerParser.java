@@ -34,6 +34,7 @@ public class WastickerParser {
     private static final String PREFS_NAME = "mochi_prefs";
     private static final String KEY_STICKER_FOLDER = "sticker_folder_path";
     private static final String KEY_BUNDLED_SEEDED_PATH = "bundled_seeded_path";
+    private static final String KEY_ANIMATED_FLAGS_FIXED = "animated_flags_fixed";
     private static final String CONTENTS_FILE_NAME = "contents.json";
 
     // ------------------------------------------------------------------------
@@ -628,6 +629,8 @@ public class WastickerParser {
                 .edit().putString(KEY_STICKER_FOLDER, path).apply();
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().remove(KEY_BUNDLED_SEEDED_PATH).apply();
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().remove(KEY_ANIMATED_FLAGS_FIXED).apply();
         StickerContentProvider provider = StickerContentProvider.getInstance();
         if (provider != null) provider.invalidateStickerPackList();
     }
@@ -1264,8 +1267,14 @@ public class WastickerParser {
 
     /**
      * Background migration: auto-fix animated pack flags.
+     * Gated to run only once (until invalidated), since it has to open and
+     * parse the WebP header of every static sticker to check for animation.
+     * Running this unconditionally on every cold start was the cause of slow
+     * app launches as the sticker library grew.
      */
     public static void fixAnimatedPackFlagsIfNeeded(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        if (prefs.getBoolean(KEY_ANIMATED_FLAGS_FIXED, false)) return;
         try {
             JSONObject masterRoot = getOrSeedMasterRoot(context);
             JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
@@ -1331,6 +1340,7 @@ public class WastickerParser {
                 }
                 context.getContentResolver().notifyChange(StickerContentProvider.AUTHORITY_URI, null);
             }
+            prefs.edit().putBoolean(KEY_ANIMATED_FLAGS_FIXED, true).apply();
         } catch (Exception e) {
             Log.e("WastickerParser", "Failed to auto-fix animated pack flags", e);
         }

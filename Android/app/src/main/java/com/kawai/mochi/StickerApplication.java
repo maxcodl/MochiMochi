@@ -15,9 +15,21 @@ public class StickerApplication extends Application {
 
     private static final String PREFS_NAME = "mochi_prefs";
 
+    private static StickerApplication instance;
+
+    /**
+     * Static accessor for the application Context. Used by background code
+     * (e.g. StickerProcessor's thumbnail generation) that doesn't have a
+     * Context passed in directly.
+     */
+    public static StickerApplication getInstance() {
+        return instance;
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
 
         final ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
         // FORCE DOWNSAMPLING: This is required for animated WebP resizing to work

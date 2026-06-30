@@ -21,6 +21,15 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import com.facebook.imagepipeline.core.ImagePipeline;
+import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imagepipeline.request.ImageRequest;
+import com.facebook.imagepipeline.request.ImageRequestBuilder;
+import com.facebook.imagepipeline.image.CloseableImage;
+import com.facebook.imagepipeline.image.CloseableBitmap;
+import com.facebook.drawee.backends.pipeline.Fresco;
+
+
 public class StickerProcessor {
     private static final String TAG = "StickerProcessor";
     public static final int STICKER_SIZE = 512;
@@ -193,18 +202,125 @@ public class StickerProcessor {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Thumbnail generation: Fresco-first, BitmapFactory fallback
+    // ------------------------------------------------------------------
+
     /**
-     * Optimized thumbnail creation: uses inSampleSize, RGB_565 and fast scaling.
+     * Returns the WebP compress format appropriate for the running OS version.
+     */
+    private static Bitmap.CompressFormat webpFormat() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return Bitmap.CompressFormat.WEBP_LOSSY;
+        }
+        //noinspection deprecation
+        return Bitmap.CompressFormat.WEBP;
+    }
+
+    /**
+     * Fast thumbnail creation (File version). Tries Fresco's native decode
+     * pipeline first (libwebp/libjpeg-turbo via ImagePipeline), which decodes
+     * directly to the target size and avoids a separate Java-side scaling pass.
+     * Falls back to the BitmapFactory-based legacy path if Fresco is
+     * unavailable or fails for any reason.
      */
     public static void createThumbnail(File sourceFile, File destFile) throws IOException {
+        Context appContext = StickerApplication.getInstance();
+        if (appContext != null) {
+            try {
+                if (createThumbnailFresco(appContext, Uri.fromFile(sourceFile), Uri.fromFile(destFile), THUMB_SIZE)) {
+                    return;
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "Fresco thumbnail generation failed, falling back to legacy", e);
+            }
+        }
+        createThumbnailLegacy(sourceFile, destFile);
+    }
+
+    /**
+     * Fast thumbnail creation (Context/Uri version). Tries Fresco first,
+     * falls back to the BitmapFactory-based legacy path on failure.
+     */
+    public static void createThumbnail(Context context, Uri sourceUri, Uri destUri) throws IOException {
+        try {
+            if (createThumbnailFresco(context, sourceUri, destUri, THUMB_SIZE)) {
+                return;
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Fresco thumbnail generation failed, falling back to legacy", e);
+        }
+        createThumbnailLegacy(context, sourceUri, destUri);
+    }
+
+    /**
+     * Attempts to decode + resize + compress a thumbnail using Fresco's
+     * ImagePipeline. Returns true if it succeeded and wrote destUri, false if
+     * Fresco couldn't produce a usable bitmap (caller should fall back).
+     * Throws IOException only for I/O failures while writing output.
+     */
+    private static boolean createThumbnailFresco(Context context, Uri sourceUri, Uri destUri, int targetSize) throws IOException {
+        ImagePipeline pipeline;
+        try {
+            pipeline = Fresco.getImagePipeline();
+        } catch (Exception e) {
+            // Fresco not initialized
+            return false;
+        }
+
+        ImageRequest request = ImageRequestBuilder.newBuilderWithSource(sourceUri)
+                .setResizeOptions(new ResizeOptions(targetSize, targetSize))
+                .setLocalThumbnailPreviewsEnabled(true)
+                .build();
+
+        com.facebook.common.references.CloseableReference<CloseableImage> imageRef = null;
+        try {
+            imageRef = pipeline.fetchDecodedImage(request, context).getResult();
+        } catch (Exception e) {
+            Log.w(TAG, "Fresco fetchDecodedImage failed", e);
+            return false;
+        }
+
+        if (imageRef == null || !imageRef.isValid()) return false;
+
+        try {
+            CloseableImage closeableImage = imageRef.get();
+            if (closeableImage == null) return false;
+            Bitmap bitmap;
+            try {
+                bitmap = ((CloseableBitmap) closeableImage).getUnderlyingBitmap();
+            } catch (ClassCastException e) {
+                return false;
+            }
+            if (bitmap == null || bitmap.isRecycled()) {
+                return false;
+            }
+
+            try (OutputStream out = context.getContentResolver().openOutputStream(destUri)) {
+                if (out == null) throw new IOException("Failed to open output stream");
+                BufferedOutputStream bos = new BufferedOutputStream(out);
+                bitmap.compress(webpFormat(), 40, bos);
+                bos.flush();
+            }
+            return true;
+        } finally {
+            com.facebook.common.references.CloseableReference.closeSafely(imageRef);
+        }
+    }
+
+    /**
+     * Optimized thumbnail creation (legacy fallback): uses inSampleSize,
+     * RGB_565 and fast scaling via BitmapFactory.
+     */
+    private static void createThumbnailLegacy(File sourceFile, File destFile) throws IOException {
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), opts);
-        
+
         opts.inSampleSize = calculateInSampleSize(opts, THUMB_SIZE, THUMB_SIZE);
         opts.inPreferredConfig = Bitmap.Config.RGB_565; // Faster & less memory for thumbnails
         opts.inJustDecodeBounds = false;
-        
+
         Bitmap source = BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), opts);
         if (source == null) return;
 
@@ -212,14 +328,7 @@ public class StickerProcessor {
 
         try (FileOutputStream out = new FileOutputStream(destFile)) {
             BufferedOutputStream bos = new BufferedOutputStream(out);
-            Bitmap.CompressFormat format;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                format = Bitmap.CompressFormat.WEBP_LOSSY;
-            } else {
-                //noinspection deprecation
-                format = Bitmap.CompressFormat.WEBP;
-            }
-            thumb.compress(format, 50, bos); // Lower quality for thumbnails is fine
+            thumb.compress(webpFormat(), 50, bos); // Lower quality for thumbnails is fine
             bos.flush();
         } finally {
             thumb.recycle();
@@ -227,9 +336,9 @@ public class StickerProcessor {
     }
 
     /**
-     * Optimized thumbnail creation (Context/Uri version).
+     * Optimized thumbnail creation (legacy fallback, Context/Uri version).
      */
-    public static void createThumbnail(Context context, Uri sourceUri, Uri destUri) throws IOException {
+    private static void createThumbnailLegacy(Context context, Uri sourceUri, Uri destUri) throws IOException {
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inJustDecodeBounds = true;
         try (InputStream is = context.getContentResolver().openInputStream(sourceUri)) {
@@ -240,7 +349,7 @@ public class StickerProcessor {
         opts.inSampleSize = calculateInSampleSize(opts, THUMB_SIZE, THUMB_SIZE);
         opts.inPreferredConfig = Bitmap.Config.RGB_565;
         opts.inJustDecodeBounds = false;
-        
+
         Bitmap source;
         try (InputStream is = context.getContentResolver().openInputStream(sourceUri)) {
             if (is == null) throw new IOException("Failed to open input stream");
@@ -253,14 +362,7 @@ public class StickerProcessor {
         try (OutputStream out = context.getContentResolver().openOutputStream(destUri)) {
             if (out == null) throw new IOException("Failed to open output stream");
             BufferedOutputStream bos = new BufferedOutputStream(out);
-            Bitmap.CompressFormat format;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                format = Bitmap.CompressFormat.WEBP_LOSSY;
-            } else {
-                //noinspection deprecation
-                format = Bitmap.CompressFormat.WEBP;
-            }
-            thumb.compress(format, 50, bos);
+            thumb.compress(webpFormat(), 50, bos);
             bos.flush();
         } finally {
             thumb.recycle();

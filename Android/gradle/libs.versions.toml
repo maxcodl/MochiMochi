@@ -30,6 +30,7 @@ fresco = { group = "com.facebook.fresco", name = "fresco", version.ref = "fresco
 fresco-webpsupport = { group = "com.facebook.fresco", name = "webpsupport", version.ref = "fresco" }
 fresco-animated-webp = { group = "com.facebook.fresco", name = "animated-webp", version.ref = "fresco" }
 fresco-animated-base = { group = "com.facebook.fresco", name = "animated-base", version.ref = "fresco" }
+fresco-middleware = { group = "com.facebook.fresco", name = "middleware", version.ref = "fresco" }
 facebook-infer-annotation = { group = "com.facebook.infer.annotation", name = "infer-annotation", version.ref = "inferAnnotation" }
 facebook-shimmer = { group = "com.facebook.shimmer", name = "shimmer", version.ref = "shimmer" }
 lottie = { group = "com.airbnb.android", name = "lottie", version.ref = "lottie" }
