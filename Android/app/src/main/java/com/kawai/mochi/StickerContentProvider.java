@@ -31,8 +31,10 @@ import com.kawai.mochi.BuildConfig;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Collections;
@@ -60,6 +62,19 @@ public class StickerContentProvider extends ContentProvider {
     public static final String STICKER_FILE_EMOJI_IN_QUERY = "sticker_emoji";
     public static final String STICKER_FILE_ACCESSIBILITY_TEXT_IN_QUERY = "sticker_accessibility_text";
     private static final String CONTENT_FILE_NAME = "contents.json";
+    private static final String THUMB_MIRROR_DIR = "thumb_mirror";
+
+    /**
+     * Path to the local (internal storage) mirror directory for a pack's
+     * thumbnails. Used only when the sticker folder is a slow SAF location
+     * (e.g. an SD card) — Fresco does not disk-cache local/content URIs, so
+     * without this every cold start would re-read every thumbnail straight
+     * from the SD card via SAF. Public so WastickerParser can clear stale
+     * mirrors when thumbnails are deleted/regenerated.
+     */
+    public static File getThumbMirrorDir(@NonNull Context context, @NonNull String identifier) {
+        return new File(new File(context.getCacheDir(), THUMB_MIRROR_DIR), identifier);
+    }
 
     public static final Uri AUTHORITY_URI = new Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(BuildConfig.CONTENT_PROVIDER_AUTHORITY).appendPath(StickerContentProvider.METADATA).build();
 
@@ -76,6 +91,17 @@ public class StickerContentProvider extends ContentProvider {
     private List<StickerPack> stickerPackList;
     private Map<String, StickerPack> stickerPackMap = new LinkedHashMap<>();
     private static StickerContentProvider instance;
+
+    // SAF lookups (DocumentFile.findFile) are expensive IPC round-trips to the
+    // document provider that list every child of a directory and scan for a
+    // name match. Doing that per-asset (every thumbnail, tray icon, sticker)
+    // made list loads take many seconds on custom SAF folders. Cache the
+    // directory listings instead and only rebuild them when invalidated.
+    private final Object safCacheLock = new Object();
+    private String safCachedRootPath;
+    private DocumentFile safCachedRoot;
+    private Map<String, DocumentFile> safPackDirCache; // identifier -> pack DocumentFile (children of root)
+    private final Map<String, Map<String, DocumentFile>> safPackFileCache = new java.util.HashMap<>(); // identifier -> fileName -> DocumentFile
 
     public static StickerContentProvider getInstance() {
         return instance;
@@ -146,7 +172,7 @@ public class StickerContentProvider extends ContentProvider {
         List<StickerPack> loadedPacks = null;
         String folderPath = WastickerParser.getStickerFolderPath(context);
         if (WastickerParser.isCustomPathUri(context)) {
-            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(folderPath));
+            DocumentFile root = getSafRoot(context, folderPath);
             if (root != null) {
                 DocumentFile contents = root.findFile(CONTENT_FILE_NAME);
                 if (contents != null) {
@@ -183,6 +209,132 @@ public class StickerContentProvider extends ContentProvider {
 
     public synchronized void invalidateStickerPackList() {
         stickerPackList = null;
+        synchronized (safCacheLock) {
+            safCachedRootPath = null;
+            safCachedRoot = null;
+            safPackDirCache = null;
+            safPackFileCache.clear();
+        }
+    }
+
+    /**
+     * Lighter-weight than {@link #invalidateStickerPackList()}: only clears the
+     * SAF directory-listing caches, not the parsed pack metadata. Call this
+     * after creating a brand-new pack directory via SAF mid-session (e.g.
+     * during import), so the next cached lookup picks it up instead of
+     * working from a stale listing that predates the new folder.
+     */
+    public void invalidateSafDirCache() {
+        synchronized (safCacheLock) {
+            safPackDirCache = null;
+            safPackFileCache.clear();
+        }
+    }
+
+    /**
+     * Returns (and caches) the SAF root DocumentFile, rebuilding only if the
+     * configured folder path changed or the cache was invalidated.
+     */
+    private DocumentFile getSafRoot(@NonNull Context context, @NonNull String folderPath) {
+        synchronized (safCacheLock) {
+            if (safCachedRoot != null && folderPath.equals(safCachedRootPath)) {
+                return safCachedRoot;
+            }
+            safCachedRoot = DocumentFile.fromTreeUri(context, Uri.parse(folderPath));
+            safCachedRootPath = folderPath;
+            safPackDirCache = null;
+            safPackFileCache.clear();
+            return safCachedRoot;
+        }
+    }
+
+    /**
+     * Returns (and caches) a map of pack identifier -> pack directory, built
+     * from a single listFiles() call on the root instead of one findFile()
+     * call per pack.
+     */
+    private Map<String, DocumentFile> getSafPackDirs(@NonNull Context context, @NonNull String folderPath) {
+        synchronized (safCacheLock) {
+            if (safPackDirCache != null) return safPackDirCache;
+            Map<String, DocumentFile> dirs = new java.util.HashMap<>();
+            DocumentFile root = getSafRoot(context, folderPath);
+            if (root != null) {
+                for (DocumentFile child : root.listFiles()) {
+                    String name = child.getName();
+                    if (name != null && child.isDirectory()) {
+                        dirs.put(name, child);
+                    }
+                }
+            }
+            safPackDirCache = dirs;
+            return dirs;
+        }
+    }
+
+    /**
+     * Returns (and caches) a map of fileName -> DocumentFile for a given pack,
+     * built from a single listFiles() call on the pack directory instead of
+     * one findFile() call per asset.
+     */
+    private Map<String, DocumentFile> getSafPackFiles(@NonNull Context context, @NonNull String folderPath, @NonNull String identifier) {
+        synchronized (safCacheLock) {
+            Map<String, DocumentFile> cached = safPackFileCache.get(identifier);
+            if (cached != null) return cached;
+            Map<String, DocumentFile> files = new java.util.HashMap<>();
+            DocumentFile packDir = getSafPackDirs(context, folderPath).get(identifier);
+            if (packDir != null) {
+                for (DocumentFile f : packDir.listFiles()) {
+                    String name = f.getName();
+                    if (name != null && !f.isDirectory()) {
+                        files.put(name, f);
+                    }
+                }
+            }
+            safPackFileCache.put(identifier, files);
+            return files;
+        }
+    }
+
+    /**
+     * Cache-coherent lookup (and optional creation) of a file inside a pack's
+     * SAF directory. Used by WastickerParser's thumbnail generation to avoid
+     * the findFile()/findFile()/createFile() chain (2-3 SAF IPC round-trips
+     * per sticker) that made bulk thumbnail generation slow on SD-card-backed
+     * folders. Falls back to a plain (uncached) lookup if this provider
+     * instance hasn't been created yet.
+     *
+     * @param mimeType if non-null and the file doesn't exist, it will be
+     *                 created with this mime type and added to the cache.
+     *                 If null, this is a lookup-only call.
+     */
+    @Nullable
+    public DocumentFile getOrCreateSafFileCached(@NonNull Context context, @NonNull String packId,
+                                                 @NonNull String fileName, @Nullable String mimeType) {
+        String folderPath = WastickerParser.getStickerFolderPath(context);
+        synchronized (safCacheLock) {
+            Map<String, DocumentFile> files = getSafPackFiles(context, folderPath, packId);
+            DocumentFile existing = files.get(fileName);
+            if (existing != null) return existing;
+
+            if (mimeType == null) {
+                // Lookup-only miss: the file might have just been written outside
+                // this cache (e.g. mid-import, before the cache knew about it).
+                // Self-heal with one direct check rather than silently failing.
+                DocumentFile packDir = getSafPackDirs(context, folderPath).get(packId);
+                if (packDir == null) return null;
+                DocumentFile direct = packDir.findFile(fileName);
+                if (direct != null) files.put(fileName, direct);
+                return direct;
+            }
+
+            DocumentFile packDir = getSafPackDirs(context, folderPath).get(packId);
+            if (packDir == null) return null;
+            DocumentFile created = packDir.createFile(mimeType, fileName);
+            if (created != null) {
+                files.put(fileName, created);
+            }
+            return created;
+        }
     }
 
     private List<StickerPack> getStickerPackList() {
@@ -363,19 +515,49 @@ public class StickerContentProvider extends ContentProvider {
         }
 
         if (WastickerParser.isCustomPathUri(context)) {
-            try {
-                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(folderPath));
-                if (root != null) {
-                    DocumentFile packDir = root.findFile(resolvedIdentifier);
-                    if (packDir != null) {
-                        DocumentFile file = packDir.findFile(fileName);
-                        if (file != null) {
-                            return context.getContentResolver().openAssetFileDescriptor(file.getUri(), "r");
+            // Thumbnails are read in bulk every time a list/grid is shown. Fresco
+            // does not disk-cache local/content URIs, so on an SD-card-backed SAF
+            // folder every cold start would otherwise re-fetch every thumbnail via
+            // slow SAF IPC. Mirror them into internal storage (real fast disk) on
+            // first read; after that, serve straight from the mirror.
+            if (fileName.startsWith("thumb_")) {
+                File mirror = new File(getThumbMirrorDir(context, resolvedIdentifier), fileName);
+                if (mirror.exists()) {
+                    try {
+                        return new AssetFileDescriptor(ParcelFileDescriptor.open(mirror, ParcelFileDescriptor.MODE_READ_ONLY), 0, mirror.length());
+                    } catch (IOException e) {
+                        // Mirror file vanished/corrupt; fall through and re-fetch + re-mirror below.
+                    }
+                }
+                try {
+                    DocumentFile file = getSafPackFiles(context, folderPath, resolvedIdentifier).get(fileName);
+                    if (file != null) {
+                        File parent = mirror.getParentFile();
+                        if (parent != null && !parent.exists()) parent.mkdirs();
+                        try (InputStream is = context.getContentResolver().openInputStream(file.getUri());
+                             OutputStream os = new FileOutputStream(mirror)) {
+                            if (is != null) {
+                                byte[] buffer = new byte[8192];
+                                int len;
+                                while ((len = is.read(buffer)) > 0) os.write(buffer, 0, len);
+                            }
+                        }
+                        if (mirror.exists()) {
+                            return new AssetFileDescriptor(ParcelFileDescriptor.open(mirror, ParcelFileDescriptor.MODE_READ_ONLY), 0, mirror.length());
                         }
                     }
-                    AssetFileDescriptor fallback = tryFetchChunkTrayFallback(context, root, identifier, fileName);
-                    if (fallback != null) return fallback;
+                } catch (Exception e) {
+                    Log.w("StickerCP", "Failed to mirror thumbnail locally, serving from SAF directly: " + fileName, e);
                 }
+                // Mirroring failed; fall through to serve directly from SAF below.
+            }
+            try {
+                DocumentFile file = getSafPackFiles(context, folderPath, resolvedIdentifier).get(fileName);
+                if (file != null) {
+                    return context.getContentResolver().openAssetFileDescriptor(file.getUri(), "r");
+                }
+                AssetFileDescriptor fallback = tryFetchChunkTrayFallback(context, folderPath, identifier, fileName);
+                if (fallback != null) return fallback;
             } catch (Exception e) { Log.e("StickerCP", "SAF fetch failed", e); }
         } else {
             try {
@@ -402,7 +584,7 @@ public class StickerContentProvider extends ContentProvider {
     @Override public int update(@NonNull Uri uri, ContentValues v, String s, String[] sa) { throw new UnsupportedOperationException(); }
 
     @Nullable
-    private AssetFileDescriptor tryFetchChunkTrayFallback(@NonNull Context context, @NonNull DocumentFile root,
+    private AssetFileDescriptor tryFetchChunkTrayFallback(@NonNull Context context, @NonNull String folderPath,
                                                          @NonNull String identifier, @NonNull String fileName) {
         if (!isChunkIdentifier(identifier)) return null;
         if (!fileName.equals(getTrayFileNameForIdentifier(identifier))) return null;
@@ -410,9 +592,7 @@ public class StickerContentProvider extends ContentProvider {
         String originalId = getOriginalIdentifier(identifier);
         if (originalId == null) return null;
 
-        DocumentFile packDir = root.findFile(originalId);
-        if (packDir == null) return null;
-        DocumentFile file = packDir.findFile(fileName);
+        DocumentFile file = getSafPackFiles(context, folderPath, originalId).get(fileName);
         if (file == null) return null;
         try {
             return context.getContentResolver().openAssetFileDescriptor(file.getUri(), "r");

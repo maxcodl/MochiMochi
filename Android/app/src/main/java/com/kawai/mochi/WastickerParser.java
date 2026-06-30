@@ -208,12 +208,16 @@ public class WastickerParser {
         if (isCustomPathUri(context)) {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             DocumentFile packDir = root != null ? root.findFile(packId) : null;
-            if (packDir == null) return;
-            for (DocumentFile file : packDir.listFiles()) {
-                if (file.getName() != null && file.getName().startsWith("thumb_")) {
-                    file.delete();
+            if (packDir != null) {
+                for (DocumentFile file : packDir.listFiles()) {
+                    if (file.getName() != null && file.getName().startsWith("thumb_")) {
+                        file.delete();
+                    }
                 }
             }
+            // Also clear the internal-storage mirror used to speed up thumbnail
+            // loads on SD-card-backed SAF folders (see StickerContentProvider).
+            deleteRecursive(StickerContentProvider.getThumbMirrorDir(context, packId));
         } else {
             File packDir = new File(new File(rootPath), packId);
             if (!packDir.exists()) return;
@@ -287,18 +291,35 @@ public class WastickerParser {
         String rootPath = getStickerFolderPath(context);
 
         if (isCustomPathUri(context)) {
-            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
-            if (root == null) return;
-            DocumentFile packDir = root.findFile(packId);
-            if (packDir == null) return;
-            DocumentFile original = packDir.findFile(fileName);
-            if (original == null || !original.exists()) return;
-            DocumentFile thumb = packDir.findFile(thumbName);
-            if (thumb == null) {
-                thumb = packDir.createFile("image/webp", thumbName);
+            StickerContentProvider provider = StickerContentProvider.getInstance();
+            DocumentFile original;
+            DocumentFile thumb;
+            if (provider != null) {
+                // Cache-coherent path: avoids the findFile()/findFile()/createFile()
+                // chain (2-3 SAF IPC round-trips per sticker) that made bulk
+                // thumbnail generation slow on SD-card-backed folders.
+                original = provider.getOrCreateSafFileCached(context, packId, fileName, null);
+                if (original == null || !original.exists()) return;
+                thumb = provider.getOrCreateSafFileCached(context, packId, thumbName, "image/webp");
+            } else {
+                // Fallback: provider not yet created, use direct (uncached) lookups.
+                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+                if (root == null) return;
+                DocumentFile packDir = root.findFile(packId);
+                if (packDir == null) return;
+                original = packDir.findFile(fileName);
+                if (original == null || !original.exists()) return;
+                thumb = packDir.findFile(thumbName);
+                if (thumb == null) {
+                    thumb = packDir.createFile("image/webp", thumbName);
+                }
             }
             if (thumb != null) {
                 StickerProcessor.createThumbnail(context, original.getUri(), thumb.getUri());
+                // Drop any stale internal-storage mirror so the next read re-mirrors
+                // the freshly generated thumbnail instead of serving old bytes.
+                File staleMirror = new File(StickerContentProvider.getThumbMirrorDir(context, packId), thumbName);
+                if (staleMirror.exists()) staleMirror.delete();
             }
         } else {
             File packDir = new File(new File(rootPath), packId);
@@ -510,7 +531,11 @@ public class WastickerParser {
                     : DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             if (root == null) throw new IOException("Cannot access custom folder");
             DocumentFile packDir = root.findFile(packId);
-            if (packDir == null) root.createDirectory(packId);
+            if (packDir == null) {
+                root.createDirectory(packId);
+                StickerContentProvider provider = StickerContentProvider.getInstance();
+                if (provider != null) provider.invalidateSafDirCache();
+            }
         } else {
             File packDir = new File(new File(rootPath), packId);
             if (!packDir.exists()) packDir.mkdirs();
