@@ -3,14 +3,10 @@ package com.kawai.mochi;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.os.Environment;
 import android.util.Log;
 import android.content.res.AssetManager;
 
 import androidx.documentfile.provider.DocumentFile;
-
-import com.facebook.animated.webp.WebPImage;
-import com.facebook.imagepipeline.common.ImageDecodeOptions;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -40,17 +36,16 @@ public class WastickerParser {
     private static final String KEY_BUNDLED_SEEDED_PATH = "bundled_seeded_path";
     private static final String CONTENTS_FILE_NAME = "contents.json";
 
-    /**
-     * First-run seed: copy bundled sticker packs from assets into the selected storage folder.
-     * This keeps built-in packs available from storage (not direct asset reads).
-     */
+    // ------------------------------------------------------------------------
+    //  First‑run seed (bundled packs)
+    // ------------------------------------------------------------------------
+
     public static synchronized void seedBundledPacksIfNeeded(Context context) {
         try {
             String rootPath = getStickerFolderPath(context);
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             String seededPath = prefs.getString(KEY_BUNDLED_SEEDED_PATH, null);
 
-            // Fast no-op: already seeded for this exact storage path.
             if (rootPath.equals(seededPath)) {
                 return;
             }
@@ -82,10 +77,8 @@ public class WastickerParser {
             bundledPacks = ContentFileParser.parseStickerPacks(is);
         }
 
-        // Copy contents.json first.
         copyAssetFileToInternal(context.getAssets(), CONTENTS_FILE_NAME, contentsFile);
 
-        // Copy tray + sticker assets for each bundled pack.
         for (StickerPack pack : bundledPacks) {
             File packDir = new File(rootDir, pack.identifier);
             if (!packDir.exists()) {
@@ -194,6 +187,191 @@ public class WastickerParser {
         }
     }
 
+    // ------------------------------------------------------------------------
+    //  Public progress callback for thumbnail regeneration
+    // ------------------------------------------------------------------------
+
+    public interface ProgressCallback {
+        void onProgress(int current, int total);
+    }
+
+    // ------------------------------------------------------------------------
+    //  Thumbnail deletion / regeneration (public)
+    // ------------------------------------------------------------------------
+
+    /**
+     * Deletes all thumbnails (files starting with "thumb_") inside a given pack.
+     */
+    private static void deleteThumbnailsForPack(Context context, String packId) throws IOException {
+        String rootPath = getStickerFolderPath(context);
+        if (isCustomPathUri(context)) {
+            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+            DocumentFile packDir = root != null ? root.findFile(packId) : null;
+            if (packDir == null) return;
+            for (DocumentFile file : packDir.listFiles()) {
+                if (file.getName() != null && file.getName().startsWith("thumb_")) {
+                    file.delete();
+                }
+            }
+        } else {
+            File packDir = new File(new File(rootPath), packId);
+            if (!packDir.exists()) return;
+            File[] files = packDir.listFiles();
+            if (files == null) return;
+            for (File f : files) {
+                if (f.getName().startsWith("thumb_")) {
+                    f.delete();
+                }
+            }
+        }
+    }
+
+    /**
+     * Regenerates all thumbnails for all packs, showing progress via callback.
+     * Deletes any existing thumbnails first.
+     */
+    public static void regenerateAllThumbnails(Context context, ProgressCallback callback) throws IOException, JSONException {
+        JSONObject master = getOrSeedMasterRoot(context);
+        JSONArray packs = master.optJSONArray("sticker_packs");
+        if (packs == null) return;
+
+        int total = 0;
+        for (int i = 0; i < packs.length(); i++) {
+            JSONObject pack = packs.getJSONObject(i);
+            JSONArray stickers = pack.optJSONArray("stickers");
+            if (stickers != null) total += stickers.length();
+        }
+
+        int processed = 0;
+        for (int i = 0; i < packs.length(); i++) {
+            JSONObject pack = packs.getJSONObject(i);
+            String identifier = pack.optString("identifier");
+            // Delete old thumbnails first
+            deleteThumbnailsForPack(context, identifier);
+
+            JSONArray stickers = pack.optJSONArray("stickers");
+            if (stickers == null) continue;
+            for (int s = 0; s < stickers.length(); s++) {
+                String fileName = stickers.getJSONObject(s).optString("image_file");
+                if (fileName.isEmpty()) continue;
+                try {
+                    generateThumbnailForSticker(context, identifier, fileName);
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to generate thumbnail for " + identifier + "/" + fileName, e);
+                }
+                processed++;
+                if (callback != null) {
+                    callback.onProgress(processed, total);
+                }
+            }
+        }
+        // Mark migration as done (so it won't run again on next start)
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putBoolean("thumbnails_generated", true).apply();
+    }
+
+    // ------------------------------------------------------------------------
+    //  Core thumbnail generator (used by all import/edit paths)
+    // ------------------------------------------------------------------------
+
+    /**
+     * Generates a WebP thumbnail for a sticker inside its pack folder.
+     * The thumbnail size is determined by StickerProcessor.THUMB_SIZE.
+     * Uses the prefix "thumb_" + originalFileName.
+     */
+    private static void generateThumbnailForSticker(Context context, String packId, String fileName)
+            throws IOException {
+        if (fileName == null || fileName.isEmpty()) return;
+        String thumbName = "thumb_" + fileName;
+        String rootPath = getStickerFolderPath(context);
+
+        if (isCustomPathUri(context)) {
+            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+            if (root == null) return;
+            DocumentFile packDir = root.findFile(packId);
+            if (packDir == null) return;
+            DocumentFile original = packDir.findFile(fileName);
+            if (original == null || !original.exists()) return;
+            DocumentFile thumb = packDir.findFile(thumbName);
+            if (thumb == null) {
+                thumb = packDir.createFile("image/webp", thumbName);
+            }
+            if (thumb != null) {
+                StickerProcessor.createThumbnail(context, original.getUri(), thumb.getUri());
+            }
+        } else {
+            File packDir = new File(new File(rootPath), packId);
+            File original = new File(packDir, fileName);
+            if (!original.exists()) return;
+            File thumb = new File(packDir, thumbName);
+            StickerProcessor.createThumbnail(original, thumb);
+        }
+    }
+
+    /**
+     * One‑time migration: generates missing thumbnails for all existing sticker packs.
+     * Call this once from StickerApplication.onCreate().
+     */
+    public static void generateMissingThumbnails(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        if (prefs.getBoolean("thumbnails_generated", false)) return;
+
+        try {
+            JSONObject master = getOrSeedMasterRoot(context);
+            JSONArray packs = master.optJSONArray("sticker_packs");
+            if (packs == null) return;
+
+            for (int i = 0; i < packs.length(); i++) {
+                JSONObject pack = packs.getJSONObject(i);
+                String identifier = pack.optString("identifier");
+                JSONArray stickers = pack.optJSONArray("stickers");
+                if (stickers == null) continue;
+                for (int s = 0; s < stickers.length(); s++) {
+                    String fileName = stickers.getJSONObject(s).optString("image_file");
+                    if (!fileName.isEmpty()) {
+                        try {
+                            generateThumbnailForSticker(context, identifier, fileName);
+                        } catch (Exception e) {
+                            Log.w(TAG, "Failed thumbnail for " + identifier + "/" + fileName, e);
+                        }
+                    }
+                }
+            }
+            prefs.edit().putBoolean("thumbnails_generated", true).apply();
+        } catch (Exception e) {
+            Log.e(TAG, "Thumbnail migration failed", e);
+        }
+    }
+
+    /**
+     * Helper for parallel thumbnail regeneration used by ThumbnailRegenerationManager.
+     */
+    public static void regenerateThumbnailsForPackParallel(Context context, String identifier, JSONArray stickers, boolean deleteExisting, Runnable onStickerDone) throws IOException, JSONException {
+        if (deleteExisting) {
+            deleteThumbnailsForPack(context, identifier);
+        }
+        if (stickers == null) return;
+        for (int s = 0; s < stickers.length(); s++) {
+            String fileName = stickers.getJSONObject(s).optString("image_file");
+            if (!fileName.isEmpty()) {
+                try {
+                    generateThumbnailForSticker(context, identifier, fileName);
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to generate thumbnail for " + identifier + "/" + fileName, e);
+                }
+            }
+            if (onStickerDone != null) {
+                onStickerDone.run();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    //  Import / Export / Merge (unchanged from your original code)
+    //  All these methods now call generateThumbnailForSticker() after copying
+    //  a sticker file, so thumbnails are created automatically.
+    // ------------------------------------------------------------------------
+
     public interface ImportProgressCallback {
         void onProgress(int current, int total);
     }
@@ -214,7 +392,7 @@ public class WastickerParser {
 
             File contentsFile = new File(tempDir, "contents.json");
             JSONArray packsArray = new JSONArray();
-            
+
             if (contentsFile.exists()) {
                 String contentsJson = readStringFromFile(contentsFile);
                 JSONObject root = new JSONObject(contentsJson);
@@ -222,12 +400,12 @@ public class WastickerParser {
             } else {
                 File titleFile = new File(tempDir, "title.txt");
                 if (!titleFile.exists()) throw new IOException("Invalid sticker pack: missing title.txt and contents.json");
-                
+
                 String title = readStringFromFile(titleFile).trim();
                 String author = "Bot";
                 File authorFile = new File(tempDir, "author.txt");
                 if (authorFile.exists()) author = readStringFromFile(authorFile).trim();
-                
+
                 JSONObject botPack = new JSONObject();
                 String newId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
                 botPack.put("identifier", newId);
@@ -252,7 +430,6 @@ public class WastickerParser {
             JSONObject masterRoot = getOrSeedMasterRoot(context);
             JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
 
-            // Pre-fetch the SAF root once for the entire import — avoids re-opening it per sticker.
             final boolean isSAF = isCustomPathUri(context);
             final DocumentFile safRoot = isSAF
                     ? DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)))
@@ -264,13 +441,9 @@ public class WastickerParser {
                     String identifier = packJson.optString("identifier", UUID.randomUUID().toString());
                     if (firstPackIdentifier == null) firstPackIdentifier = identifier;
 
-                    // Create pack directory (internal path or SAF)
                     ensureDirectory(context, identifier, safRoot);
-
-                    // Pre-fetch the pack DocumentFile once per pack — avoids one findFile() IPC per sticker.
                     DocumentFile packDirDoc = (safRoot != null) ? safRoot.findFile(identifier) : null;
 
-                    // Copy tray and stickers
                     String trayImageFile = packJson.optString("tray_image_file", "tray.png");
                     File traySource = new File(tempDir, trayImageFile);
                     if (traySource.exists()) {
@@ -285,12 +458,15 @@ public class WastickerParser {
                             File src = new File(tempDir, imageFile);
                             if (src.exists()) {
                                 copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
+                                try {
+                                    generateThumbnailForSticker(context, identifier, imageFile);
+                                } catch (IOException e) {
+                                    Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e);
+                                }
                                 if (!detectedAnimated) {
                                     try {
                                         StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(src);
-                                        if (info.isAnimated) {
-                                            detectedAnimated = true;
-                                        }
+                                        if (info.isAnimated) detectedAnimated = true;
                                     } catch (Exception ignored) {}
                                 }
                             }
@@ -306,8 +482,7 @@ public class WastickerParser {
                     } else if (!packJson.has("animated_sticker_pack")) {
                         packJson.put("animated_sticker_pack", false);
                     }
-                    
-                    // Ensure version exists before merging
+
                     if (!packJson.has("image_data_version")) {
                         packJson.put("image_data_version", "1");
                     }
@@ -345,26 +520,21 @@ public class WastickerParser {
         copyToPackFolder(context, src, packId, fileName, null);
     }
 
-    /**
-     * Copies {@code src} into the sticker pack folder, optionally accepting a pre-fetched
-     * {@code packDirDoc} to avoid redundant SAF IPC calls when copying many files into the same pack.
-     */
     private static void copyToPackFolder(Context context, File src, String packId, String fileName,
                                          DocumentFile packDirDoc) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            // Use the pre-fetched pack dir when available; fall back to a fresh lookup otherwise.
             DocumentFile packDir = packDirDoc;
             if (packDir == null) {
                 DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
                 packDir = root != null ? root.findFile(packId) : null;
             }
             if (packDir == null) throw new IOException("Pack directory not found: " + packId);
-            
+
             DocumentFile destFile = packDir.findFile(fileName);
             if (destFile == null) destFile = packDir.createFile("image/*", fileName);
             if (destFile == null) throw new IOException("Could not create file: " + fileName);
-            
+
             try (InputStream is = new FileInputStream(src);
                  OutputStream os = context.getContentResolver().openOutputStream(destFile.getUri())) {
                 byte[] buffer = new byte[8192]; int len;
@@ -393,7 +563,7 @@ public class WastickerParser {
         }
 
         if (json != null) return new JSONObject(json);
-        
+
         JSONObject masterRoot = new JSONObject();
         masterRoot.put("sticker_packs", new JSONArray());
         return masterRoot;
@@ -455,13 +625,16 @@ public class WastickerParser {
 
     public static void setStickerFolderPath(Context context, String path) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-               .edit().putString(KEY_STICKER_FOLDER, path).apply();
-        // Force bundled seeding for the newly selected folder on next read.
+                .edit().putString(KEY_STICKER_FOLDER, path).apply();
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().remove(KEY_BUNDLED_SEEDED_PATH).apply();
         StickerContentProvider provider = StickerContentProvider.getInstance();
         if (provider != null) provider.invalidateStickerPackList();
     }
+
+    // ------------------------------------------------------------------------
+    //  Utility I/O
+    // ------------------------------------------------------------------------
 
     public static String readStringFromFile(File file) throws IOException {
         try (InputStream is = new FileInputStream(file)) {
@@ -560,6 +733,10 @@ public class WastickerParser {
         fileOrDir.delete();
     }
 
+    // ------------------------------------------------------------------------
+    //  Public API: delete, export, save, merge, etc.
+    // ------------------------------------------------------------------------
+
     public static void deleteStickerPack(Context context, String identifier) throws IOException, JSONException {
         JSONObject masterRoot = getOrSeedMasterRoot(context);
         JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
@@ -573,7 +750,7 @@ public class WastickerParser {
 
         masterRoot.put("sticker_packs", updatedPacks);
         saveMasterContents(context, masterRoot);
-        
+
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
@@ -584,9 +761,6 @@ public class WastickerParser {
         }
     }
 
-    /**
-     * Fast animation check: reads only the WebP header via WebPMetadataReader.
-     */
     public static boolean isAnimatedWebPPublic(Context context, String identifier, String fileName) {
         try {
             Uri uri = StickerPackLoader.getStickerAssetUri(identifier, fileName);
@@ -659,7 +833,7 @@ public class WastickerParser {
     }
 
     public static void savePack(Context context, String name, String author, String identifier,
-                               List<EditStickerAdapter.StickerItem> items, Uri trayUri) throws IOException, JSONException {
+                                List<EditStickerAdapter.StickerItem> items, Uri trayUri) throws IOException, JSONException {
         JSONObject masterRoot = getOrSeedMasterRoot(context);
         JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
         if (masterPacks == null) {
@@ -688,14 +862,29 @@ public class WastickerParser {
         packJson.put("publisher", author);
         if (!packJson.has("tray_image_file")) packJson.put("tray_image_file", "tray.png");
 
-        ensureDirectory(context, identifier);
+        boolean needsFileSystemOps = (trayUri != null);
+        if (!needsFileSystemOps) {
+            for (EditStickerAdapter.StickerItem item : items) {
+                if (item.newUri != null || (item.packIdentifier != null && !item.packIdentifier.equals(identifier))) {
+                    needsFileSystemOps = true;
+                    break;
+                }
+            }
+        }
 
-        // Pre-fetch the SAF pack directory once — avoids re-opening root + calling findFile()
-        // inside every processAndSaveImage() call (one IPC per sticker on SAF).
         DocumentFile preloadedPackDir = null;
-        if (isCustomPathUri(context)) {
-            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)));
-            if (root != null) preloadedPackDir = root.findFile(identifier);
+        if (needsFileSystemOps) {
+            if (isCustomPathUri(context)) {
+                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(getStickerFolderPath(context)));
+                if (root == null) throw new IOException("Root folder inaccessible");
+                preloadedPackDir = root.findFile(identifier);
+                if (preloadedPackDir == null) {
+                    preloadedPackDir = root.createDirectory(identifier);
+                }
+            } else {
+                File packDir = new File(new File(getStickerFolderPath(context)), identifier);
+                if (!packDir.exists()) packDir.mkdirs();
+            }
         }
 
         if (trayUri != null) {
@@ -728,6 +917,7 @@ public class WastickerParser {
             }
         }
         packJson.put("stickers", stickersArray);
+
         saveMasterContents(context, masterRoot);
 
         StickerContentProvider provider = StickerContentProvider.getInstance();
@@ -738,15 +928,10 @@ public class WastickerParser {
         processAndSaveImage(context, sourceUri, packId, fileName, isTray, null);
     }
 
-    /**
-     * Processes and saves an image into the sticker pack folder, optionally accepting a
-     * pre-fetched {@code packDirDoc} to avoid redundant SAF IPC calls during batch saves.
-     */
     private static void processAndSaveImage(Context context, Uri sourceUri, String packId, String fileName,
                                             boolean isTray, DocumentFile packDirDoc) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            // Use pre-fetched pack dir when available; fall back to a fresh lookup otherwise.
             DocumentFile packDir = packDirDoc;
             if (packDir == null) {
                 DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
@@ -757,20 +942,27 @@ public class WastickerParser {
             if (destFile == null) destFile = packDir.createFile(isTray ? "image/png" : "image/webp", fileName);
             if (destFile == null) throw new IOException("Could not create file: " + fileName);
 
-            if (isTray) StickerProcessor.processTrayIcon(context, sourceUri, destFile.getUri());
-            else StickerProcessor.processStaticSticker(context, sourceUri, destFile.getUri());
+            if (isTray) {
+                StickerProcessor.processTrayIcon(context, sourceUri, destFile.getUri());
+            } else {
+                StickerProcessor.processStaticSticker(context, sourceUri, destFile.getUri());
+                generateThumbnailForSticker(context, packId, fileName);
+            }
         } else {
             File packDir = new File(new File(rootPath), packId);
             File destFile = new File(packDir, fileName);
-            if (isTray) StickerProcessor.processTrayIcon(context, sourceUri, destFile);
-            else StickerProcessor.processStaticSticker(context, sourceUri, destFile);
+            if (isTray) {
+                StickerProcessor.processTrayIcon(context, sourceUri, destFile);
+            } else {
+                StickerProcessor.processStaticSticker(context, sourceUri, destFile);
+                generateThumbnailForSticker(context, packId, fileName);
+            }
         }
     }
 
     private static void copyWithinStorage(Context context, String srcPackId, String srcFileName, String dstPackId, String dstFileName) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            // Open the SAF root once; avoid two separate fromTreeUri() calls.
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             DocumentFile srcDir = root != null ? root.findFile(srcPackId) : null;
             DocumentFile dstDir = root != null ? root.findFile(dstPackId) : null;
@@ -786,10 +978,14 @@ public class WastickerParser {
                 byte[] buffer = new byte[8192]; int len;
                 while ((len = is.read(buffer)) > 0) os.write(buffer, 0, len);
             }
+            generateThumbnailForSticker(context, dstPackId, dstFileName);
         } else {
             File srcFile = new File(new File(new File(rootPath), srcPackId), srcFileName);
             File dstFile = new File(new File(new File(rootPath), dstPackId), dstFileName);
-            if (srcFile.exists()) copyFile(srcFile, dstFile);
+            if (srcFile.exists()) {
+                copyFile(srcFile, dstFile);
+                generateThumbnailForSticker(context, dstPackId, dstFileName);
+            }
         }
     }
 
@@ -797,7 +993,6 @@ public class WastickerParser {
         String identifier = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         ensureDirectory(context, identifier);
 
-        // Copy first sticker as tray icon and first sticker
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
@@ -806,10 +1001,12 @@ public class WastickerParser {
             DocumentFile stickerFile = packDir.createFile("image/webp", "1.webp");
             StickerProcessor.processTrayIcon(context, Uri.fromFile(webpFile), trayFile.getUri());
             copyFileToUri(context, webpFile, stickerFile.getUri());
+            generateThumbnailForSticker(context, identifier, "1.webp");
         } else {
             File packDir = new File(new File(rootPath), identifier);
             StickerProcessor.processTrayIcon(webpFile, new File(packDir, "tray.png"));
             copyFile(webpFile, new File(packDir, "1.webp"));
+            generateThumbnailForSticker(context, identifier, "1.webp");
         }
 
         JSONObject masterRoot = getOrSeedMasterRoot(context);
@@ -845,24 +1042,25 @@ public class WastickerParser {
 
         JSONArray stickers = packJson.getJSONArray("stickers");
         String fileName = (stickers.length() + 1) + ".webp";
-        
+
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             DocumentFile packDir = root.findFile(identifier);
             DocumentFile stickerFile = packDir.createFile("image/webp", fileName);
             copyFileToUri(context, webpFile, stickerFile.getUri());
+            generateThumbnailForSticker(context, identifier, fileName);
         } else {
             File packDir = new File(new File(rootPath), identifier);
             copyFile(webpFile, new File(packDir, fileName));
+            generateThumbnailForSticker(context, identifier, fileName);
         }
 
         JSONObject s = new JSONObject();
         s.put("image_file", fileName);
         s.put("emojis", new JSONArray().put("\uD83D\uDE00"));
         stickers.put(s);
-        
-        // Ensure version exists during update
+
         if (!packJson.has("image_data_version")) {
             packJson.put("image_data_version", "1");
         }
@@ -878,9 +1076,9 @@ public class WastickerParser {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Pack Merge
-    // -------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    //  Merge Sticker Packs
+    // ------------------------------------------------------------------------
 
     public static void mergeStickerPacks(Context context,
                                          List<StickerPack> sourcePacks,
@@ -888,19 +1086,6 @@ public class WastickerParser {
         mergeStickerPacks(context, sourcePacks, maxStickers, null);
     }
 
-    /**
-     * Creates a new sticker pack whose stickers are the union of {@code sourcePacks},
-     * capped at {@code maxStickers} (WhatsApp allows at most 30).
-     *
-     * <p>The new pack takes the name and publisher of the first selected pack.
-     * Stickers are added in source-pack order; once the cap is reached the remainder
-     * are silently skipped (the caller already warned the user in the confirmation dialog).
-     *
-     * @param context     Application context.
-     * @param sourcePacks Packs to merge (must be ≥ 2).
-     * @param maxStickers Hard cap on total stickers in the merged pack (≤ 30).
-     * @param callback    Optional progress callback.
-     */
     public static void mergeStickerPacks(Context context,
                                          List<StickerPack> sourcePacks,
                                          int maxStickers,
@@ -908,7 +1093,6 @@ public class WastickerParser {
         if (sourcePacks == null || sourcePacks.size() < 2) {
             throw new IllegalArgumentException("Need at least 2 packs to merge");
         }
-        // WhatsApp packs must be uniformly animated or uniformly static.
         boolean firstAnimated = sourcePacks.get(0).animatedStickerPack;
         for (StickerPack p : sourcePacks) {
             if (p.animatedStickerPack != firstAnimated) {
@@ -917,21 +1101,16 @@ public class WastickerParser {
             }
         }
 
-        // New pack metadata derived from the first selected pack.
         String newId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         StickerPack firstPack = sourcePacks.get(0);
         String mergedName   = firstPack.name   != null ? firstPack.name : "Merged Pack";
         String mergedAuthor = firstPack.publisher != null ? firstPack.publisher : "Unknown";
 
-        // Create the directory for the new pack.
         ensureDirectory(context, newId);
 
         final boolean isSAF = isCustomPathUri(context);
         final String rootPath = getStickerFolderPath(context);
 
-        // Pre-fetch SAF root + new pack dir once — avoids per-sticker IPC.
-        // NOTE: ensureDirectory already created the dir; use findFile first, then
-        // createDirectory as fallback to handle any SAF DocumentFile cache lag.
         DocumentFile safRoot    = isSAF ? DocumentFile.fromTreeUri(context, Uri.parse(rootPath)) : null;
         DocumentFile newPackDir = null;
         if (safRoot != null) {
@@ -939,7 +1118,6 @@ public class WastickerParser {
             if (newPackDir == null) newPackDir = safRoot.createDirectory(newId);
         }
 
-        // Build the sticker JSON array while copying files.
         JSONArray stickersArray = new JSONArray();
         int stickerIndex = 1;
 
@@ -954,7 +1132,6 @@ public class WastickerParser {
             List<Sticker> stickers = sourcePack.getStickers();
             if (stickers == null) continue;
 
-            // Pre-fetch the source pack dir on SAF (one findFile per source pack, not per sticker).
             DocumentFile srcPackDir = (safRoot != null) ? safRoot.findFile(sourcePack.identifier) : null;
 
             for (Sticker sticker : stickers) {
@@ -962,7 +1139,6 @@ public class WastickerParser {
 
                 String destFileName = stickerIndex + ".webp";
 
-                // Raw copy — stickers already live on device and are valid as-is.
                 if (isSAF) {
                     if (srcPackDir == null || newPackDir == null) continue;
                     DocumentFile srcFile  = srcPackDir.findFile(sticker.imageFileName);
@@ -975,15 +1151,15 @@ public class WastickerParser {
                         byte[] buf = new byte[8192]; int len;
                         while ((len = is.read(buf)) > 0) os.write(buf, 0, len);
                     }
+                    generateThumbnailForSticker(context, newId, destFileName);
                 } else {
                     File srcFile  = new File(new File(rootPath, sourcePack.identifier), sticker.imageFileName);
                     File destFile = new File(new File(rootPath, newId), destFileName);
                     if (!srcFile.exists()) continue;
                     copyFile(srcFile, destFile);
+                    generateThumbnailForSticker(context, newId, destFileName);
                 }
 
-
-                // Build sticker JSON entry, preserving all emojis.
                 JSONObject stickerJson = new JSONObject();
                 stickerJson.put("image_file", destFileName);
                 JSONArray emojis = new JSONArray();
@@ -994,7 +1170,7 @@ public class WastickerParser {
                 }
                 stickerJson.put("emojis", emojis);
                 stickersArray.put(stickerJson);
-                
+
                 if (callback != null) {
                     callback.onProgress(stickerIndex, totalToCopy);
                 }
@@ -1003,7 +1179,6 @@ public class WastickerParser {
         }
 
         if (stickersArray.length() < 3) {
-            // WhatsApp requires at least 3 stickers — clean up and abort.
             if (isSAF) {
                 if (newPackDir != null) newPackDir.delete();
             } else {
@@ -1012,7 +1187,6 @@ public class WastickerParser {
             throw new IOException("Merged pack has fewer than 3 stickers. Import the source packs first.");
         }
 
-        // Copy the tray icon from the first source pack that has one.
         String trayFile = "tray.png";
         boolean trayCopied = false;
         for (StickerPack sourcePack : sourcePacks) {
@@ -1040,7 +1214,6 @@ public class WastickerParser {
             if (trayCopied) break;
         }
 
-        // Write the master contents.json entry.
         JSONObject masterRoot  = getOrSeedMasterRoot(context);
         JSONArray  masterPacks = masterRoot.optJSONArray("sticker_packs");
         if (masterPacks == null) {
@@ -1061,32 +1234,36 @@ public class WastickerParser {
         saveMasterContents(context, masterRoot);
     }
 
-    // -------------------------------------------------------------------------
-    // Pack Export
-    // -------------------------------------------------------------------------
+    // ------------------------------------------------------------------------
+    //  Public delegates for chunk manager
+    // ------------------------------------------------------------------------
 
-    /**
-     * Public delegate for the private {@code getOrSeedMasterRoot} — used by
-     * {@link StickerPackChunkManager} to read the master contents.json.
-     */
     public static JSONObject getOrSeedMasterRootPublic(Context context)
             throws IOException, JSONException {
         return getOrSeedMasterRoot(context);
     }
 
-    /**
-     * Public delegate for the private {@code saveMasterContents} — used by
-     * {@link StickerPackChunkManager} to persist updates to contents.json.
-     */
     public static void saveMasterContentsPublic(Context context, JSONObject root)
             throws IOException {
         saveMasterContents(context, root);
     }
 
     /**
-     * Background migration: scans all imported sticker packs in the master contents.json,
-     * inspects their WebP files, and if any contains animated frames but the pack's
-     * animated_sticker_pack flag is false (or missing), auto-corrects it to true and saves contents.json.
+     * Public delegate for deleting thumbnails inside a pack.
+     */
+    public static void deleteThumbnailsForPackPublic(Context context, String packId) throws IOException {
+        deleteThumbnailsForPack(context, packId);
+    }
+
+    /**
+     * Public delegate for generating a single thumbnail.
+     */
+    public static void generateThumbnailForStickerPublic(Context context, String packId, String fileName) throws IOException {
+        generateThumbnailForSticker(context, packId, fileName);
+    }
+
+    /**
+     * Background migration: auto-fix animated pack flags.
      */
     public static void fixAnimatedPackFlagsIfNeeded(Context context) {
         try {
@@ -1102,7 +1279,7 @@ public class WastickerParser {
             for (int i = 0; i < masterPacks.length(); i++) {
                 JSONObject packJson = masterPacks.getJSONObject(i);
                 boolean isAnimatedFlag = packJson.optBoolean("animated_sticker_pack", false);
-                if (isAnimatedFlag) continue; // Already marked as animated
+                if (isAnimatedFlag) continue;
 
                 String identifier = packJson.optString("identifier");
                 if (identifier == null || identifier.trim().isEmpty()) continue;

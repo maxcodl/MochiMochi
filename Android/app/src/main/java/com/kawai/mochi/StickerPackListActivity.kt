@@ -15,6 +15,8 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.Toolbar
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -31,7 +33,8 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.Pair
 
-class StickerPackListActivity : AddStickerPackActivity() {
+
+class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationManager.Listener {
     private lateinit var packLayoutManager: LinearLayoutManager
     private lateinit var packRecyclerView: RecyclerView
     private lateinit var allStickerPacksListAdapter: StickerPackListAdapter
@@ -51,14 +54,13 @@ class StickerPackListActivity : AddStickerPackActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            refreshStickerPacks()
+            refreshStickerPacks(true) // Silent refresh
         }
     }
 
     private val scrollListener = object : RecyclerView.OnScrollListener() {
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
-            val isScrolling = newState != RecyclerView.SCROLL_STATE_IDLE
-            allStickerPacksListAdapter.setScrolling(isScrolling)
+            // Feature removed: no longer notifying adapter of scroll state
         }
 
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
@@ -72,14 +74,14 @@ class StickerPackListActivity : AddStickerPackActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { 
         allStickerPacksListAdapter.invalidateAnimationsCache()
-        refreshStickerPacks()
+        refreshStickerPacks(true) // Silent refresh: Fix for unwanted refresh animation
     }
 
     private val mergePacksLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            refreshStickerPacks()
+            refreshStickerPacks(true) // Silent refresh
         }
     }
 
@@ -90,7 +92,9 @@ class StickerPackListActivity : AddStickerPackActivity() {
     }
 
     override fun hideProgressBar() {
-        importProgressContainer?.visibility = View.GONE
+        if (!ThumbnailRegenerationManager.isRegenerating()) {
+            importProgressContainer?.visibility = View.GONE
+        }
     }
 
     override fun updateProgress(current: Int, total: Int, message: String?) {
@@ -149,20 +153,14 @@ class StickerPackListActivity : AddStickerPackActivity() {
 
         itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
             override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder) = false
-
-            // Disable pull-to-refresh the moment a swipe gesture starts so the two
-            // gestures can't interfere with each other.
             override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
                 super.onSelectedChanged(viewHolder, actionState)
                 swipeRefresh.isEnabled = actionState == ItemTouchHelper.ACTION_STATE_IDLE
             }
-
-            // Re-enable pull-to-refresh once the finger lifts and the view snaps back.
             override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
                 super.clearView(recyclerView, viewHolder)
                 swipeRefresh.isEnabled = true
             }
-
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
                 val position = viewHolder.bindingAdapterPosition
                 if (position in stickerPackList.indices) {
@@ -171,12 +169,8 @@ class StickerPackListActivity : AddStickerPackActivity() {
                         .setTitle(R.string.delete_pack_title)
                         .setMessage(getString(R.string.delete_pack_confirm_with_name, pack.name))
                         .setPositiveButton(R.string.delete_button) { _, _ -> deletePack(position) }
-                        .setNegativeButton(R.string.cancel) { _, _ -> 
-                            cancelSwipeDelete(position)
-                        }
-                        .setOnCancelListener { 
-                            cancelSwipeDelete(position)
-                        }
+                        .setNegativeButton(R.string.cancel) { _, _ -> cancelSwipeDelete(position) }
+                        .setOnCancelListener { cancelSwipeDelete(position) }
                         .show()
                 }
             }
@@ -184,7 +178,46 @@ class StickerPackListActivity : AddStickerPackActivity() {
         itemTouchHelper.attachToRecyclerView(packRecyclerView)
 
         updateEmptyState()
-        runThumbnailMigration()
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                StickerUpdateManager.updateEvent.collect {
+                    refreshStickerPacks(true)
+                }
+            }
+        }
+        
+        // Listen for thumbnail regeneration progress
+        ThumbnailRegenerationManager.addListener(this)
+    }
+
+    override fun onDestroy() {
+        ThumbnailRegenerationManager.removeListener(this)
+        super.onDestroy()
+    }
+
+    // ThumbnailRegenerationManager.Listener implementation
+    override fun onProgress(current: Int, total: Int) {
+        runOnUiThread {
+            importProgressContainer?.visibility = View.VISIBLE
+            importProgressBar?.isIndeterminate = false
+            importProgressBar?.max = total
+            importProgressBar?.setProgressCompat(current, true)
+            importStatusText?.text = getString(R.string.progress_format, current, total)
+        }
+    }
+
+    override fun onFinished() {
+        runOnUiThread {
+            importProgressContainer?.visibility = View.GONE
+            refreshStickerPacks(true)
+        }
+    }
+
+    override fun onError(message: String) {
+        runOnUiThread {
+            importProgressContainer?.visibility = View.GONE
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun refreshStickerPacks(fromSwipe: Boolean = false) {
@@ -197,14 +230,13 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 stickerPackList.clear()
                 stickerPackList.addAll(freshPacks)
 
-                if (allStickerPacksListAdapter != null) {
-                    allStickerPacksListAdapter!!.submitList(ArrayList(stickerPackList))
+                if (::allStickerPacksListAdapter.isInitialized) {
+                    allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
                 }
                 
                 updateEmptyState()
                 supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
                 
-                runThumbnailMigration()
             } catch (e: Exception) {
                 Log.e("ListActivity", "Refresh failed", e)
             } finally {
@@ -216,60 +248,11 @@ class StickerPackListActivity : AddStickerPackActivity() {
     private fun cancelSwipeDelete(position: Int) {
         val viewHolder = packRecyclerView.findViewHolderForAdapterPosition(position)
         if (viewHolder != null) {
-            // Clear the swipe state from ItemTouchHelper to animate item back to normal position
             ItemTouchHelper.Callback.getDefaultUIUtil().clearView(viewHolder.itemView)
         }
-        // Refresh the adapter to ensure the item is properly displayed
         allStickerPacksListAdapter.notifyItemChanged(position)
     }
 
-    private fun runThumbnailMigration() {
-        migrationJob?.cancel()
-        val snapshot = ArrayList(stickerPackList)
-        if (snapshot.isEmpty()) return
-
-        migrationJob = lifecycleScope.launch(Dispatchers.IO) {
-            val rootPath = WastickerParser.getStickerFolderPath(this@StickerPackListActivity)
-            val isSAF = WastickerParser.isCustomPathUri(this@StickerPackListActivity)
-            
-            snapshot.forEach { pack ->
-                try {
-                    if (isSAF) {
-                        val rootDoc = DocumentFile.fromTreeUri(this@StickerPackListActivity, Uri.parse(rootPath))
-                        val packDir = rootDoc?.findFile(pack.identifier) ?: return@forEach
-                        val thumbDir = packDir.findFile("thumbs") ?: packDir.createDirectory("thumbs") ?: return@forEach
-                        
-                        pack.stickers?.forEach { sticker ->
-                            val thumbName = "thumb_" + sticker.imageFileName
-                            if (thumbDir.findFile(thumbName) == null) {
-                                val sourceFile = packDir.findFile(sticker.imageFileName)
-                                if (sourceFile != null) {
-                                    val newThumb = thumbDir.createFile("image/webp", thumbName)
-                                    if (newThumb != null) {
-                                        StickerProcessor.createThumbnail(this@StickerPackListActivity, sourceFile.uri, newThumb.getUri())
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        val packDir = File(rootPath, pack.identifier)
-                        if (!packDir.exists()) return@forEach
-                        val thumbDir = File(packDir, "thumbs")
-                        if (!thumbDir.exists()) thumbDir.mkdirs()
-                        
-                        pack.stickers?.forEach { sticker ->
-                            val thumbFile = File(thumbDir, "thumb_" + sticker.imageFileName)
-                            if (!thumbFile.exists()) {
-                                StickerProcessor.createThumbnail(File(packDir, sticker.imageFileName), thumbFile)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e("Migration", "Failed for pack ${pack.identifier}", e)
-                }
-            }
-        }
-    }
 
     private fun showImportChoice() {
         val sheet = ImportChoiceBottomSheet.newInstance()
@@ -330,9 +313,8 @@ class StickerPackListActivity : AddStickerPackActivity() {
                         stickerPackList.add(importedPack)
                         allStickerPacksListAdapter.notifyItemInserted(stickerPackList.size - 1)
                     }
-                    runThumbnailMigration()
                 } else {
-                    refreshStickerPacks()
+                    refreshStickerPacks(true)
                 }
 
                 updateEmptyState()
@@ -341,7 +323,9 @@ class StickerPackListActivity : AddStickerPackActivity() {
             } catch (e: Exception) {
                 Toast.makeText(this@StickerPackListActivity, getString(R.string.import_error, e.message), Toast.LENGTH_LONG).show()
             } finally {
-                importProgressContainer?.visibility = View.GONE
+                if (!ThumbnailRegenerationManager.isRegenerating()) {
+                    importProgressContainer?.visibility = View.GONE
+                }
             }
         }
     }
@@ -350,7 +334,6 @@ class StickerPackListActivity : AddStickerPackActivity() {
         if (position !in stickerPackList.indices) return
         val pack = stickerPackList[position]
 
-        // Optimistic remove — update the UI instantly so the row disappears immediately.
         stickerPackList.removeAt(position)
         allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
         updateEmptyState()
@@ -365,17 +348,12 @@ class StickerPackListActivity : AddStickerPackActivity() {
                 }
                 Toast.makeText(this@StickerPackListActivity, R.string.pack_deleted, Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                // Roll back the optimistic remove on failure.
                 stickerPackList.add(position.coerceAtMost(stickerPackList.size), pack)
                 allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
                 updateEmptyState()
                 supportActionBar?.title = resources.getQuantityString(
                     R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
-                Toast.makeText(
-                    this@StickerPackListActivity,
-                    getString(R.string.error_with_message, e.message),
-                    Toast.LENGTH_LONG
-                ).show()
+                Toast.makeText(this@StickerPackListActivity, getString(R.string.error_with_message, e.message), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -417,19 +395,11 @@ class StickerPackListActivity : AddStickerPackActivity() {
 
     override fun onResume() {
         super.onResume()
-        lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
-                val animationsChanged = allStickerPacksListAdapter.animationsEnabledCache == null
-                for (i in stickerPackList.indices) {
-                    val stickerPack = stickerPackList[i]
-                    val isWhitelisted = WhitelistCheck.isWhitelisted(this@StickerPackListActivity, stickerPack.identifier)
-                    if (stickerPack.isWhitelisted != isWhitelisted || animationsChanged) {
-                        stickerPack.setIsWhitelisted(isWhitelisted)
-                        withContext(Dispatchers.Main) {
-                            allStickerPacksListAdapter.notifyItemChanged(i)
-                        }
-                    }
-                }
+        refreshStickerPacks(fromSwipe = true)
+        if (::allStickerPacksListAdapter.isInitialized) {
+            allStickerPacksListAdapter.invalidateAnimationsCache()
+            if (stickerPackList.isNotEmpty()) {
+                allStickerPacksListAdapter.notifyDataSetChanged()
             }
         }
     }
@@ -440,17 +410,9 @@ class StickerPackListActivity : AddStickerPackActivity() {
         allStickerPacksListAdapter = StickerPackListAdapter { pack -> 
             addStickerPackToWhatsApp(pack.identifier, pack.name) 
         }
-        allStickerPacksListAdapter!!.submitList(packList)
+        allStickerPacksListAdapter.submitList(packList)
         
-        // HIGH PERFORMANCE: Custom LayoutManager with extra pre-fetch space
-        packLayoutManager = object : LinearLayoutManager(this) {
-            override fun calculateExtraLayoutSpace(state: RecyclerView.State, extraLayoutSpace: IntArray) {
-                // Pre-render 1000px worth of items off-screen so they are ready before scroll
-                extraLayoutSpace[0] = 1000
-                extraLayoutSpace[1] = 1000
-            }
-        }
-        
+        packLayoutManager = LinearLayoutManager(this)
         packLayoutManager.orientation = RecyclerView.VERTICAL
         packRecyclerView.layoutManager = packLayoutManager
         packRecyclerView.itemAnimator = null
@@ -458,9 +420,6 @@ class StickerPackListActivity : AddStickerPackActivity() {
         packRecyclerView.adapter = allStickerPacksListAdapter
         packRecyclerView.setHasFixedSize(true)
         packRecyclerView.addOnScrollListener(scrollListener)
-        
-        // AGGRESSIVE CACHING: Removed large manual cache. Relying on default RecyclerView recycling.
-        // packRecyclerView.setItemViewCacheSize(40)
         
         globalLayoutListener = android.view.ViewTreeObserver.OnGlobalLayoutListener { recalculateColumnCount() }
         packRecyclerView.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)

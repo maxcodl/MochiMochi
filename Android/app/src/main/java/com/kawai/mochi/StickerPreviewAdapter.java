@@ -1,9 +1,8 @@
 package com.kawai.mochi;
 
-import android.graphics.Bitmap;
+import android.content.Context;
+import android.graphics.drawable.Animatable;
 import android.net.Uri;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
@@ -19,50 +18,45 @@ import com.facebook.drawee.drawable.ScalingUtils;
 import com.facebook.drawee.controller.BaseControllerListener;
 import com.facebook.drawee.interfaces.DraweeController;
 import com.facebook.drawee.view.SimpleDraweeView;
-import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.image.ImageInfo;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.request.ImageRequestBuilder;
 import com.facebook.shimmer.ShimmerFrameLayout;
 
+import java.io.File;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAdapter.ViewHolder> {
+
     public interface StickerInteractionListener {
         void onStickerHoldStarted(@NonNull Sticker sticker, @NonNull Uri stickerUri, boolean animatedPack);
         void onStickerHoldEnded();
     }
 
-    private static final ExecutorService decodeExecutor = Executors.newFixedThreadPool(
-            Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())));
-    private static final Handler mainHandler = new Handler(Looper.getMainLooper());
-    private static final StickerBitmapLruCache bitmapCache = StickerBitmapLruCache.getInstance();
-    
-    // POWER-OF-TWO RESOLUTION: 32px is 1/16th of 512px, which optimizes hardware downsampling
-    private static final int LIST_DECODE_SIZE_PX = 32;
-    private static final int LIST_ANIMATED_DECODE_SIZE_PX = 16;
-    // Grid stickers are decoded at 30% of their display size to cut memory and play animations smoothly.
-    // The expanded preview always uses full-res (handled separately in StickerPackDetailsActivity).
     private static final float GRID_DECODE_SCALE = 0.30f;
 
+    private final Context context;
     private List<Sticker> stickers;
     private String packIdentifier;
     private int previewSize;
     private int marginBetween;
     private boolean isAnimatedPack;
-    private boolean animationsEnabled;
-    private boolean isScrolling;
-    private boolean isAnimationsPaused; // true while the expanded sticker overlay is visible
+    private boolean animationsEnabled;          // from user settings (disable all animations)
+    private boolean isAnimationsPaused;
     private final boolean isGridMode;
     @Nullable
     private final StickerInteractionListener interactionListener;
 
-    public StickerPreviewAdapter(List<Sticker> stickers, String packIdentifier, int previewSize,
-                                 int marginBetween, boolean isAnimatedPack, boolean animationsEnabled,
-                                 boolean isGridMode, @Nullable StickerInteractionListener interactionListener) {
+    public StickerPreviewAdapter(Context context,
+                                 List<Sticker> stickers,
+                                 String packIdentifier,
+                                 int previewSize,
+                                 int marginBetween,
+                                 boolean isAnimatedPack,
+                                 boolean animationsEnabled,
+                                 boolean isGridMode,
+                                 @Nullable StickerInteractionListener interactionListener) {
+        this.context = context;
         this.stickers = stickers;
         this.packIdentifier = packIdentifier;
         this.previewSize = previewSize;
@@ -74,37 +68,19 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         setHasStableIds(true);
     }
 
-    public StickerPreviewAdapter(List<Sticker> stickers, String packIdentifier, int previewSize,
-                                 int marginBetween, boolean isAnimatedPack, boolean animationsEnabled,
-                                 boolean isGridMode) {
-        this(stickers, packIdentifier, previewSize, marginBetween, isAnimatedPack, animationsEnabled, isGridMode, null);
-    }
-
-    public StickerPreviewAdapter(List<Sticker> stickers, String packIdentifier, int previewSize, int marginBetween, boolean isAnimatedPack, boolean animationsEnabled) {
-        this(stickers, packIdentifier, previewSize, marginBetween, isAnimatedPack, animationsEnabled, false, null);
-    }
-
-    public void setScrolling(boolean isScrolling) {
-        if (this.isScrolling != isScrolling) {
-            this.isScrolling = isScrolling;
-            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
-        }
-    }
-
-    /**
-     * Pauses or resumes background animations without touching the scroll-pause flag.
-     * Call with {@code true} when an expanded preview overlay is shown, {@code false} when hidden.
-     */
     public void setAnimationsPaused(boolean paused) {
         if (this.isAnimationsPaused != paused) {
             this.isAnimationsPaused = paused;
-            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
+            notifyItemRangeChanged(0, getItemCount(), "animation_state_change");
         }
     }
 
-    public void updateData(List<Sticker> newStickers, String newPackId,
-                           int newPreviewSize, int newMargin,
-                           boolean newIsAnimated, boolean newAnimEnabled, boolean newIsScrolling) {
+    public void updateData(List<Sticker> newStickers,
+                           String newPackId,
+                           int newPreviewSize,
+                           int newMargin,
+                           boolean newIsAnimated,
+                           boolean newAnimEnabled) {
         boolean packChanged = !newPackId.equals(packIdentifier);
         this.stickers = newStickers;
         this.packIdentifier = newPackId;
@@ -112,12 +88,23 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         this.marginBetween = newMargin;
         this.isAnimatedPack = newIsAnimated;
         this.animationsEnabled = newAnimEnabled;
-        this.isScrolling = newIsScrolling;
-        
+
         if (packChanged) {
             notifyDataSetChanged();
         } else {
-            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
+            notifyItemRangeChanged(0, getItemCount(), "animation_state_change");
+        }
+    }
+
+    public void prefetchThumbnails() {
+        if (stickers == null) return;
+        for (Sticker sticker : stickers) {
+            String thumbName = "thumb_" + sticker.imageFileName;
+            Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, thumbName);
+            ImageRequest request = ImageRequestBuilder.newBuilderWithSource(thumbUri)
+                    .setLocalThumbnailPreviewsEnabled(true)
+                    .build();
+            Fresco.getImagePipeline().prefetchToDiskCache(request, null);
         }
     }
 
@@ -136,7 +123,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
 
     @Override
     public void onBindViewHolder(@NonNull ViewHolder holder, int position, @NonNull List<Object> payloads) {
-        if (payloads.contains("scroll_state_change")) {
+        if (payloads.contains("animation_state_change")) {
             updateContentState(holder);
         } else {
             super.onBindViewHolder(holder, position, payloads);
@@ -147,83 +134,104 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     public void onBindViewHolder(@NonNull ViewHolder holder, int position) {
         Sticker sticker = stickers.get(position);
         holder.sticker = sticker;
-        
-        String thumbName = "thumbs/thumb_" + sticker.imageFileName;
-        int decodeSize = isGridMode ? Math.round(previewSize * GRID_DECODE_SCALE) : LIST_DECODE_SIZE_PX;
-        String cacheKey = packIdentifier + "/" + (isGridMode ? sticker.imageFileName : thumbName) + "@" + decodeSize;
 
-        if (cacheKey.equals(holder.boundCacheKey)) {
-            updateContentState(holder);
-            return;
-        }
-
-        holder.bindToken++;
-        long token = holder.bindToken;
-        cancelDecode(holder);
-        
-        holder.boundCacheKey = cacheKey;
         holder.errorView.setVisibility(View.GONE);
-        holder.draweeView.setController(null);
-        holder.draweeView.setVisibility(View.GONE);
+        holder.bitmapView.setVisibility(View.GONE);
+        holder.draweeView.setVisibility(View.VISIBLE);
 
+        String thumbName = "thumb_" + sticker.imageFileName;
         final Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, thumbName);
         final Uri fullUri = StickerPackLoader.getStickerAssetUri(packIdentifier, sticker.imageFileName);
 
         setupInteractions(holder, sticker, fullUri);
 
-        Bitmap cached = bitmapCache.get(cacheKey);
-        if (cached != null && !cached.isRecycled()) {
-            holder.bitmapView.setImageBitmap(cached);
-            holder.bitmapView.setVisibility(View.VISIBLE);
+        boolean thumbExists = thumbnailFileExists(packIdentifier, thumbName);
+        Uri loadUri = thumbExists ? thumbUri : fullUri;
+        int decodeSize = 0;
+
+        if (!thumbExists) {
+            decodeSize = Math.round(previewSize * GRID_DECODE_SCALE);
+            if (decodeSize < 1) decodeSize = previewSize;
+        }
+
+        boolean isCached = Fresco.getImagePipeline().isInBitmapMemoryCache(loadUri);
+        if (isCached) {
+            holder.skeletonView.stopShimmer();
             holder.skeletonView.setVisibility(View.GONE);
         } else {
-            holder.bitmapView.setImageDrawable(null);
-            holder.bitmapView.setVisibility(View.GONE);
             holder.skeletonView.setVisibility(View.VISIBLE);
             holder.skeletonView.startShimmer();
-            bindStaticSticker(holder, isGridMode ? fullUri : thumbUri, fullUri, decodeSize, cacheKey, token);
         }
 
-        if (sticker.isAnimated && animationsEnabled && !isScrolling) {
-            // In list mode, use thumbnail for animated preview to keep resolution low.
-            Uri animatedSourceUri = isGridMode ? fullUri : thumbUri;
-            int animatedDecodeSize = isGridMode ? Math.round(previewSize * GRID_DECODE_SCALE) : LIST_ANIMATED_DECODE_SIZE_PX;
-            bindAnimatedSticker(holder, animatedSourceUri, fullUri, animatedDecodeSize, token);
-        }
-
+        bindFrescoImage(holder, sticker, loadUri, fullUri, decodeSize);
         applyLayout(holder, position);
     }
 
-    private void updateContentState(@NonNull ViewHolder holder) {
-        if (holder.sticker == null) return;
+    private void bindFrescoImage(@NonNull final ViewHolder holder,
+                                 final Sticker sticker,
+                                 @NonNull final Uri sourceUri,
+                                 @NonNull final Uri fullUri,
+                                 int decodeSize) {
+        holder.draweeView.getHierarchy().setActualImageScaleType(ScalingUtils.ScaleType.FIT_CENTER);
 
-        if (!isScrolling && !isAnimationsPaused && animationsEnabled && holder.sticker.isAnimated) {
-            if (holder.draweeView.getController() == null) {
-                final Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, "thumbs/thumb_" + holder.sticker.imageFileName);
-                final Uri fullUri = StickerPackLoader.getStickerAssetUri(packIdentifier, holder.sticker.imageFileName);
-                Uri animatedSourceUri = isGridMode ? fullUri : thumbUri;
-                int animatedDecodeSize = isGridMode ? Math.round(previewSize * GRID_DECODE_SCALE) : LIST_ANIMATED_DECODE_SIZE_PX;
-                bindAnimatedSticker(holder, animatedSourceUri, fullUri, animatedDecodeSize, holder.bindToken);
-            } else {
-                DraweeController controller = holder.draweeView.getController();
-                if (controller.getAnimatable() != null) controller.getAnimatable().start();
-            }
+        ImageRequestBuilder builder = ImageRequestBuilder.newBuilderWithSource(sourceUri)
+                .setLocalThumbnailPreviewsEnabled(true);
+
+        if (decodeSize > 0) {
+            builder.setResizeOptions(
+                    new com.facebook.imagepipeline.common.ResizeOptions(decodeSize, decodeSize));
+        }
+
+        ImageRequest mainRequest = builder.build();
+
+        boolean shouldAutoPlay = sticker.isAnimated
+                && animationsEnabled
+                && !isAnimationsPaused;
+
+        holder.controllerListener.thumbUri = sourceUri;
+        holder.controllerListener.fullUri = fullUri;
+        holder.controllerListener.sticker = sticker;
+        holder.controllerListener.decodeSize = decodeSize;
+
+        DraweeController controller = Fresco.newDraweeControllerBuilder()
+                .setImageRequest(mainRequest)
+                .setAutoPlayAnimations(shouldAutoPlay)
+                .setControllerListener(holder.controllerListener)
+                .setOldController(holder.draweeView.getController())
+                .build();
+
+        holder.draweeView.setController(controller);
+    }
+
+    private boolean thumbnailFileExists(String packId, String thumbName) {
+        String rootPath = WastickerParser.getStickerFolderPath(context);
+        if (WastickerParser.isCustomPathUri(context)) {
+            return true;
         } else {
-            DraweeController controller = holder.draweeView.getController();
-            if (controller != null && controller.getAnimatable() != null) {
+            File thumbFile = new File(new File(rootPath, packId), thumbName);
+            return thumbFile.exists();
+        }
+    }
+
+    private void updateContentState(@NonNull ViewHolder holder) {
+        if (holder.sticker == null || !holder.sticker.isAnimated) return;
+
+        DraweeController controller = holder.draweeView.getController();
+        if (controller != null && controller.getAnimatable() != null) {
+            if (!isAnimationsPaused && animationsEnabled) {
+                controller.getAnimatable().start();
+            } else {
                 controller.getAnimatable().stop();
             }
         }
     }
 
     private void setupInteractions(@NonNull ViewHolder holder, Sticker sticker, Uri fullUri) {
-        // Single tap — show the expanded preview immediately
         holder.itemView.setOnClickListener(v -> {
             if (interactionListener != null) {
                 interactionListener.onStickerHoldStarted(sticker, fullUri, sticker.isAnimated);
             }
         });
-        // Long press — same expanded preview (kept for muscle memory)
         holder.itemView.setOnLongClickListener(v -> {
             if (interactionListener != null) {
                 interactionListener.onStickerHoldStarted(sticker, fullUri, sticker.isAnimated);
@@ -242,76 +250,6 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         });
     }
 
-    private void bindAnimatedSticker(@NonNull final ViewHolder holder, @NonNull final Uri animatedSourceUri,
-                                     @NonNull final Uri fullUri,
-                                     final int decodeSize, final long token) {
-        holder.draweeView.setVisibility(View.VISIBLE);
-        holder.draweeView.getHierarchy().setActualImageScaleType(ScalingUtils.ScaleType.FIT_CENTER);
-        
-        // For animated stickers, use the source directly (thumb in list, full in grid)
-        ImageRequest mainRequest = ImageRequestBuilder.newBuilderWithSource(animatedSourceUri)
-                .setResizeOptions(new ResizeOptions(decodeSize, decodeSize))
-                .build();
-
-        DraweeController controller = Fresco.newDraweeControllerBuilder()
-                .setImageRequest(mainRequest)
-                .setAutoPlayAnimations(animationsEnabled && !isScrolling)
-                .setControllerListener(new BaseControllerListener<ImageInfo>() {
-                    @Override
-                    public void onFinalImageSet(String id, @Nullable ImageInfo imageInfo, @Nullable android.graphics.drawable.Animatable animatable) {
-                        if (holder.bindToken == token) {
-                            holder.bitmapView.setVisibility(View.GONE);
-                            holder.skeletonView.setVisibility(View.GONE);
-                        }
-                    }
-
-                    @Override
-                    public void onFailure(String id, Throwable throwable) {
-                        if (holder.bindToken == token) {
-                            holder.draweeView.setVisibility(View.GONE);
-                            // If animated thumb cannot be loaded, fall back to low-res static decode.
-                            bindStaticSticker(holder, animatedSourceUri, fullUri, decodeSize, holder.boundCacheKey, token);
-                        }
-                    }
-                })
-                .setOldController(holder.draweeView.getController())
-                .build();
-
-        holder.draweeView.setController(controller);
-    }
-
-    private void bindStaticSticker(@NonNull final ViewHolder holder, @NonNull final Uri fileUri, @Nullable final Uri fallbackUri,
-                                   final int decodeSize, @NonNull final String cacheKey, final long token) {
-        if (holder.bitmapView.getVisibility() == View.VISIBLE) return;
-
-        holder.decodeFuture = decodeExecutor.submit(() -> {
-            Bitmap decoded = null;
-            try {
-                decoded = StickerStaticDecoder.decode(holder.itemView.getContext().getApplicationContext(), fileUri, decodeSize, decodeSize);
-            } catch (Throwable t) {
-                if (fallbackUri != null) {
-                    try {
-                        decoded = StickerStaticDecoder.decode(holder.itemView.getContext().getApplicationContext(), fallbackUri, decodeSize, decodeSize);
-                    } catch (Throwable t2) { decoded = null; }
-                }
-            }
-
-            final Bitmap result = decoded;
-            mainHandler.post(() -> {
-                if (holder.bindToken != token || !cacheKey.equals(holder.boundCacheKey)) return;
-                if (result == null) {
-                    showDecodeError(holder);
-                    return;
-                }
-                bitmapCache.put(cacheKey, result);
-                holder.bitmapView.setImageBitmap(result);
-                holder.bitmapView.setVisibility(View.VISIBLE);
-                holder.skeletonView.stopShimmer();
-                holder.skeletonView.setVisibility(View.GONE);
-            });
-        });
-    }
-
     private void applyLayout(@NonNull ViewHolder holder, int position) {
         ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) holder.itemView.getLayoutParams();
         if (lp == null) lp = new ViewGroup.MarginLayoutParams(previewSize, previewSize);
@@ -319,42 +257,30 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         lp.height = previewSize;
         if (isGridMode) {
             int half = marginBetween / 2;
-            lp.topMargin = half; lp.bottomMargin = half;
-            lp.setMarginStart(half); lp.setMarginEnd(half);
+            lp.topMargin = half;
+            lp.bottomMargin = half;
+            lp.setMarginStart(half);
+            lp.setMarginEnd(half);
         } else {
-            lp.topMargin = 0; lp.bottomMargin = 0;
-            lp.setMarginEnd(0); lp.setMarginStart(position > 0 ? marginBetween : 0);
+            lp.topMargin = 0;
+            lp.bottomMargin = 0;
+            lp.setMarginEnd(0);
+            lp.setMarginStart(position > 0 ? marginBetween : 0);
         }
         holder.itemView.setLayoutParams(lp);
-    }
-
-    private void showDecodeError(@NonNull ViewHolder holder) {
-        holder.bitmapView.setVisibility(View.GONE);
-        holder.draweeView.setVisibility(View.GONE);
-        holder.errorView.setVisibility(View.VISIBLE);
-        holder.skeletonView.stopShimmer();
-        holder.skeletonView.setVisibility(View.GONE);
-    }
-
-    private void cancelDecode(@NonNull ViewHolder holder) {
-        if (holder.decodeFuture != null) {
-            holder.decodeFuture.cancel(true);
-            holder.decodeFuture = null;
-        }
     }
 
     @Override
     public void onViewRecycled(@NonNull ViewHolder holder) {
         super.onViewRecycled(holder);
-        cancelDecode(holder);
-        holder.bindToken++;
-        holder.boundCacheKey = "";
         holder.sticker = null;
-        holder.bitmapView.setImageDrawable(null);
         holder.draweeView.setController(null);
         holder.skeletonView.stopShimmer();
         holder.skeletonView.setVisibility(View.GONE);
         holder.errorView.setVisibility(View.GONE);
+        holder.controllerListener.thumbUri = null;
+        holder.controllerListener.fullUri = null;
+        holder.controllerListener.sticker = null;
     }
 
     @Override
@@ -362,15 +288,14 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         return stickers == null ? 0 : stickers.size();
     }
 
-    static class ViewHolder extends RecyclerView.ViewHolder {
+    class ViewHolder extends RecyclerView.ViewHolder {
         final ShimmerFrameLayout skeletonView;
         final ImageView bitmapView;
         final SimpleDraweeView draweeView;
         final ImageView errorView;
         @Nullable Sticker sticker;
-        @Nullable Future<?> decodeFuture;
-        long bindToken;
-        @NonNull String boundCacheKey = "";
+
+        final HolderControllerListener controllerListener = new HolderControllerListener();
 
         ViewHolder(View itemView) {
             super(itemView);
@@ -379,6 +304,32 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
             this.draweeView = itemView.findViewById(R.id.sticker_pack_list_item_image);
             this.errorView = itemView.findViewById(R.id.sticker_preview_error);
             this.draweeView.getHierarchy().setFadeDuration(0);
+        }
+
+        class HolderControllerListener extends BaseControllerListener<ImageInfo> {
+            @Nullable Uri thumbUri;
+            @Nullable Uri fullUri;
+            @Nullable Sticker sticker;
+            int decodeSize;
+
+            @Override
+            public void onFinalImageSet(String id, @Nullable ImageInfo imageInfo,
+                                        @Nullable Animatable animatable) {
+                skeletonView.stopShimmer();
+                skeletonView.setVisibility(View.GONE);
+            }
+
+            @Override
+            public void onFailure(String id, Throwable throwable) {
+                if (thumbUri != null && fullUri != null && !thumbUri.equals(fullUri)) {
+                    bindFrescoImage(ViewHolder.this, sticker, fullUri, fullUri, decodeSize);
+                } else {
+                    draweeView.setVisibility(View.GONE);
+                    errorView.setVisibility(View.VISIBLE);
+                    skeletonView.stopShimmer();
+                    skeletonView.setVisibility(View.GONE);
+                }
+            }
         }
     }
 }

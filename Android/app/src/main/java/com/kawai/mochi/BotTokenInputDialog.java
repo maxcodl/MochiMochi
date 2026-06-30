@@ -16,9 +16,10 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
  */
 public class BotTokenInputDialog {
 
+    @FunctionalInterface
     public interface OnTokenInputListener {
         void onTokenSaved(String token);
-        void onTokenInputCancelled();
+        default void onTokenInputCancelled() {}
     }
 
     /**

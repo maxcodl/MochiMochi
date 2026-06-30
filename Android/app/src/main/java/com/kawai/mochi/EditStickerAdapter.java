@@ -21,6 +21,7 @@ import com.kawai.mochi.R;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.ViewHolder> {
 
@@ -79,22 +80,34 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
             uri = StickerPackLoader.getStickerAssetUri(item.packIdentifier, item.fileName);
         }
 
+        // Optimization: Avoid redundant controller setup if URI is the same
+        // This significantly reduces lag when typing in fields that trigger layout passes
         if (uri != null) {
-            int size = holder.stickerImage.getWidth();
-            if (size <= 0) {
-                size = (int) (96 * holder.itemView.getContext().getResources().getDisplayMetrics().density);
+            Uri currentUri = (Uri) holder.stickerImage.getTag(R.id.sticker_image);
+            if (!uri.equals(currentUri)) {
+                holder.stickerImage.setTag(R.id.sticker_image, uri);
+                
+                int size = holder.stickerImage.getWidth();
+                if (size <= 0) {
+                    size = (int) (96 * holder.itemView.getContext().getResources().getDisplayMetrics().density);
+                }
+                // Animated stickers decode at 40% of display size to reduce per-frame memory and CPU
+                int renderSize = item.isAnimated ? (int) (size * 0.40f) : size;
+                
+                ImageRequest request = ImageRequestBuilder.newBuilderWithSource(uri)
+                        .setResizeOptions(new ResizeOptions(renderSize, renderSize))
+                        .build();
+                
+                DraweeController controller = Fresco.newDraweeControllerBuilder()
+                        .setImageRequest(request)
+                        .setAutoPlayAnimations(true)
+                        .setOldController(holder.stickerImage.getController())
+                        .build();
+                holder.stickerImage.setController(controller);
             }
-            // Animated stickers decode at 75% of display size to reduce per-frame memory
-            int renderSize = item.isAnimated ? (int) (size * 0.40f) : size;
-            ImageRequest request = ImageRequestBuilder.newBuilderWithSource(uri)
-                    .setResizeOptions(new ResizeOptions(renderSize, renderSize))
-                    .build();
-            DraweeController controller = Fresco.newDraweeControllerBuilder()
-                    .setImageRequest(request)
-                    .setAutoPlayAnimations(true)
-                    .setOldController(holder.stickerImage.getController())
-                    .build();
-            holder.stickerImage.setController(controller);
+        } else {
+            holder.stickerImage.setController(null);
+            holder.stickerImage.setTag(R.id.sticker_image, null);
         }
 
         // Show emojis

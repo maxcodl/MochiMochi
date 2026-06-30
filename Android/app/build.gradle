@@ -78,11 +78,12 @@ dependencies {
     implementation libs.androidx.constraintlayout
     implementation libs.androidx.documentfile
     implementation libs.androidx.swiperefreshlayout
+
     
     // Performance: Coroutines for background tasks
     implementation libs.kotlinx.coroutines.android
     implementation libs.kotlinx.coroutines.core
-    
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.6.2'
     implementation libs.fresco
     implementation libs.fresco.webpsupport
     implementation libs.fresco.animated.webp

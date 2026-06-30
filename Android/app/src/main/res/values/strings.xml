@@ -171,15 +171,31 @@
     <string name="settings_performance_label">PERFORMANCE</string>
     <string name="settings_enable_animations">Enable Performance Mode</string>
     <string name="settings_import_behaviour_label">WHEN IMPORTING A SINGLE STICKER</string>
-    <string name="settings_ask_pack_picker">Ask which pack to add to</string>
+    <string name="settings_ask_pack_picker">Ask which pack to add to [WIP]</string>
     <string name="settings_diagnostics_label">DIAGNOSTICS</string>
     <string name="settings_run_diagnostics">Run Pack Diagnostics</string>
     <string name="settings_about_label">ABOUT</string>
-    <string name="settings_about_app_name">MochiMochi ジ — Sticker Manager</string>
+    <string name="settings_about_app_name">MochiMochi ジ</string>.
+    <string name="settings_about_made_with">Made with ❤</string>
     <string name="settings_about_author">by Max</string>
     <string name="settings_github_button">⭐  View on GitHub</string>
-    <string name="settings_telegram_button">💬 Telegram</string>
+    <string name="settings_telegram_button">Telegram</string>
     <string name="settings_donate_button">❤  Donate $69</string>
+
+    <!-- Thumbnails regeneration -->
+    <string name="regenerate_thumbnails">Regenerate Thumbnails</string>
+    <string name="regenerating_thumbnails_title">Regenerating Thumbnails</string>
+    <string name="thumbnails_regenerated">Thumbnails regenerated!</string>
+    <string name="progress_format">%1$d / %2$d</string>
+    <string name="regenerating_start">Regenerating…</string>
+    <string name="regenerating_percent">Regenerating… %1$d%%</string>
+    <string name="hide">Hide</string>
+    <string name="already_regenerating">Already regenerating, please wait.</string>
+    <string name="regenerate_continue">Continue (generate missing only)</string>
+    <string name="regenerate_reset">Reset (delete all and regenerate)</string>
+    <string name="regenerate_choice_message">Choose action:</string>
+    <string name="regenerating_missing">Generating missing…</string>
+
 
     <!-- Import Individual Stickers -->
     <string name="no_file_provided">No file provided</string>

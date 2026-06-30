@@ -65,7 +65,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/reset_to_default_button"
-                style="@style/Widget.Material3.Button.TextButton"
+                style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_reset_to_default"
@@ -82,37 +82,37 @@
                 android:id="@+id/theme_radio_group"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:layout_marginBottom="24dp">
+                android:layout_marginBottom="24dp"
+                android:orientation="vertical">
 
                 <RadioButton
                     android:id="@+id/theme_light"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/settings_theme_light"
-                    android:paddingVertical="8dp" />
+                    android:paddingVertical="8dp"
+                    android:text="@string/settings_theme_light" />
 
                 <RadioButton
                     android:id="@+id/theme_dark"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/settings_theme_dark"
-                    android:paddingVertical="8dp" />
+                    android:paddingVertical="8dp"
+                    android:text="@string/settings_theme_dark" />
 
                 <RadioButton
                     android:id="@+id/theme_amoled"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/settings_theme_amoled"
-                    android:paddingVertical="8dp" />
+                    android:paddingVertical="8dp"
+                    android:text="@string/settings_theme_amoled" />
 
                 <RadioButton
                     android:id="@+id/theme_system"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="@string/settings_theme_system"
+                    android:checked="true"
                     android:paddingVertical="8dp"
-                    android:checked="true" />
+                    android:text="@string/settings_theme_system" />
             </RadioGroup>
 
             <!-- Animation Toggle Section -->
@@ -126,9 +126,9 @@
                 android:id="@+id/enable_animations_switch"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginBottom="24dp"
                 android:minHeight="48dp"
                 android:text="@string/settings_enable_animations"
-                android:layout_marginBottom="24dp"
                 tools:checked="true" />
 
             <!-- Import Behaviour -->
@@ -164,13 +164,13 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/view_conversions_button"
-                style="@style/Widget.Material3.Button.OutlinedButton"
+                style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/telegram_conversion_tasks_title"
                 android:layout_marginBottom="24dp" />
 
-            <!-- Diagnostics Section -->
+            <!-- Diagnostics & Maintenance Section -->
             <TextView
                 style="@style/SettingsHeaderStyle"
                 android:layout_width="match_parent"
@@ -183,6 +183,14 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="@string/settings_run_diagnostics"
+                android:layout_marginBottom="8dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/regenerate_thumbnails_button"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/regenerate_thumbnails"
                 android:layout_marginBottom="24dp" />
 
             <!-- About Section -->
@@ -201,6 +209,13 @@
                 android:layout_marginBottom="2dp"
                 android:textColor="?attr/colorOnSurface"/>
 
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/settings_about_made_with"
+                android:textSize="14sp"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                />
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

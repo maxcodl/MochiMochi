@@ -21,7 +21,6 @@ import com.facebook.drawee.view.SimpleDraweeView;
 import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.request.ImageRequestBuilder;
-import com.kawai.mochi.R;
 
 import java.io.File;
 import java.io.IOException;
@@ -38,8 +37,9 @@ public class StickerInfoAdapter extends RecyclerView.Adapter<StickerInfoAdapter.
     private final String packId;
     private final boolean animationsEnabled;
 
-    // Background executor and main-thread handler for async WebP info loading
-    private static final ExecutorService executor = Executors.newFixedThreadPool(4);
+    // RIPPED OUT: private static final ExecutorService executor = Executors.newFixedThreadPool(4);
+    // INSTANT IO REPLACEMENT: Use a cached thread pool to dynamically scale threads and eliminate the bottleneck queue
+    private static final ExecutorService executor = Executors.newCachedThreadPool();
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     
     // Use a static LruCache to persist metadata across activity recreations, significantly reducing lag on second entry.

@@ -6,8 +6,10 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.net.Uri;
+import android.os.Build;
 import android.util.Log;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -23,7 +25,7 @@ public class StickerProcessor {
     private static final String TAG = "StickerProcessor";
     public static final int STICKER_SIZE = 512;
     public static final int TRAY_SIZE = 96;
-    public static final int THUMB_SIZE = 32;
+    public static final int THUMB_SIZE = 96;
     private static final long MAX_IMPORT_BYTES = 40L * 1024L * 1024L;
 
     public static void processStaticSticker(Context context, Uri uri, File destFile) throws IOException {
@@ -98,19 +100,17 @@ public class StickerProcessor {
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inJustDecodeBounds = true;
 
-        // Pass 1: decode bounds only.
         try (InputStream is = context.getContentResolver().openInputStream(uri)) {
-            if (is == null) throw new IOException("Failed to open input stream for URI: " + uri);
-            BitmapFactory.decodeStream(is, null, opts);
+            if (is == null) throw new IOException("Failed to open input stream");
+            BitmapFactory.decodeStream(new BufferedInputStream(is), null, opts);
         }
 
-        // Pass 2: decode at reduced resolution.
         opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize);
         opts.inJustDecodeBounds = false;
         Bitmap source;
         try (InputStream is = context.getContentResolver().openInputStream(uri)) {
-            if (is == null) throw new IOException("Failed to open input stream for URI: " + uri);
-            source = BitmapFactory.decodeStream(is, null, opts);
+            if (is == null) throw new IOException("Failed to open input stream");
+            source = BitmapFactory.decodeStream(new BufferedInputStream(is), null, opts);
         }
 
         if (source == null) throw new IOException("Failed to decode image from URI");
@@ -118,36 +118,40 @@ public class StickerProcessor {
     }
 
     private static Bitmap decodeAndResize(File file, int targetSize) throws IOException {
-        // Pass 1: decode bounds only.
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
-        // Pass 2: decode at reduced resolution.
         opts.inSampleSize = calculateInSampleSize(opts, targetSize, targetSize);
         opts.inJustDecodeBounds = false;
         Bitmap source = BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
-        if (source == null) throw new IOException("Failed to decode image from file: " + file.getName());
+        if (source == null) throw new IOException("Failed to decode image from file");
         return transform(source, targetSize);
     }
 
     private static Bitmap transform(Bitmap source, int targetSize) {
-        Bitmap result = Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888);
-        result.eraseColor(android.graphics.Color.TRANSPARENT);
-        Canvas canvas = new Canvas(result);
-        float scale = Math.min((float) targetSize / source.getWidth(), (float) targetSize / source.getHeight());
-        float dx = (targetSize - source.getWidth() * scale) * 0.5f;
-        float dy = (targetSize - source.getHeight() * scale) * 0.5f;
-        Matrix matrix = new Matrix();
-        matrix.postScale(scale, scale);
-        matrix.postTranslate(dx, dy);
-        canvas.drawBitmap(source, matrix, new android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG));
+        if (source.getWidth() == targetSize && source.getHeight() == targetSize) {
+            return source;
+        }
+        Bitmap result = Bitmap.createScaledBitmap(source, targetSize, targetSize, true);
+        if (result != source) {
+            source.recycle();
+        }
         return result;
     }
 
     private static void saveAsWebP(Bitmap bitmap, File file, int quality) throws IOException {
         File tempFile = new File(file.getParent(), file.getName() + ".tmp");
         try (FileOutputStream out = new FileOutputStream(tempFile)) {
-            bitmap.compress(Bitmap.CompressFormat.WEBP, quality, out);
+            BufferedOutputStream bos = new BufferedOutputStream(out);
+            Bitmap.CompressFormat format;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                format = Bitmap.CompressFormat.WEBP_LOSSY;
+            } else {
+                //noinspection deprecation
+                format = Bitmap.CompressFormat.WEBP;
+            }
+            bitmap.compress(format, quality, bos);
+            bos.flush();
         }
         if (file.exists()) file.delete();
         if (!tempFile.renameTo(file)) throw new IOException("Rename failed");
@@ -156,14 +160,25 @@ public class StickerProcessor {
     private static void saveAsWebP(Context context, Bitmap bitmap, Uri uri, int quality) throws IOException {
         try (OutputStream out = context.getContentResolver().openOutputStream(uri)) {
             if (out == null) throw new IOException("Failed to open output stream");
-            bitmap.compress(Bitmap.CompressFormat.WEBP, quality, out);
+            BufferedOutputStream bos = new BufferedOutputStream(out);
+            Bitmap.CompressFormat format;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                format = Bitmap.CompressFormat.WEBP_LOSSY;
+            } else {
+                //noinspection deprecation
+                format = Bitmap.CompressFormat.WEBP;
+            }
+            bitmap.compress(format, quality, bos);
+            bos.flush();
         }
     }
 
     public static void saveAsPng(Bitmap bitmap, File file) throws IOException {
         File tempFile = new File(file.getParent(), file.getName() + ".tmp");
         try (FileOutputStream out = new FileOutputStream(tempFile)) {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+            BufferedOutputStream bos = new BufferedOutputStream(out);
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            bos.flush();
         }
         if (file.exists()) file.delete();
         if (!tempFile.renameTo(file)) throw new IOException("Rename failed");
@@ -172,22 +187,82 @@ public class StickerProcessor {
     private static void saveAsPng(Context context, Bitmap bitmap, Uri uri) throws IOException {
         try (OutputStream out = context.getContentResolver().openOutputStream(uri)) {
             if (out == null) throw new IOException("Failed to open output stream");
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out);
+            BufferedOutputStream bos = new BufferedOutputStream(out);
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, bos);
+            bos.flush();
         }
     }
 
+    /**
+     * Optimized thumbnail creation: uses inSampleSize, RGB_565 and fast scaling.
+     */
     public static void createThumbnail(File sourceFile, File destFile) throws IOException {
-        Bitmap thumb = decodeAndResize(sourceFile, THUMB_SIZE);
-        if (thumb != null) {
-            saveAsWebP(thumb, destFile, 60);
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), opts);
+        
+        opts.inSampleSize = calculateInSampleSize(opts, THUMB_SIZE, THUMB_SIZE);
+        opts.inPreferredConfig = Bitmap.Config.RGB_565; // Faster & less memory for thumbnails
+        opts.inJustDecodeBounds = false;
+        
+        Bitmap source = BitmapFactory.decodeFile(sourceFile.getAbsolutePath(), opts);
+        if (source == null) return;
+
+        Bitmap thumb = transform(source, THUMB_SIZE);
+
+        try (FileOutputStream out = new FileOutputStream(destFile)) {
+            BufferedOutputStream bos = new BufferedOutputStream(out);
+            Bitmap.CompressFormat format;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                format = Bitmap.CompressFormat.WEBP_LOSSY;
+            } else {
+                //noinspection deprecation
+                format = Bitmap.CompressFormat.WEBP;
+            }
+            thumb.compress(format, 50, bos); // Lower quality for thumbnails is fine
+            bos.flush();
+        } finally {
             thumb.recycle();
         }
     }
 
+    /**
+     * Optimized thumbnail creation (Context/Uri version).
+     */
     public static void createThumbnail(Context context, Uri sourceUri, Uri destUri) throws IOException {
-        Bitmap thumb = decodeAndResize(context, sourceUri, THUMB_SIZE);
-        if (thumb != null) {
-            saveAsWebP(context, thumb, destUri, 60);
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inJustDecodeBounds = true;
+        try (InputStream is = context.getContentResolver().openInputStream(sourceUri)) {
+            if (is == null) throw new IOException("Failed to open input stream");
+            BitmapFactory.decodeStream(new BufferedInputStream(is), null, opts);
+        }
+
+        opts.inSampleSize = calculateInSampleSize(opts, THUMB_SIZE, THUMB_SIZE);
+        opts.inPreferredConfig = Bitmap.Config.RGB_565;
+        opts.inJustDecodeBounds = false;
+        
+        Bitmap source;
+        try (InputStream is = context.getContentResolver().openInputStream(sourceUri)) {
+            if (is == null) throw new IOException("Failed to open input stream");
+            source = BitmapFactory.decodeStream(new BufferedInputStream(is), null, opts);
+        }
+        if (source == null) return;
+
+        Bitmap thumb = transform(source, THUMB_SIZE);
+
+        try (OutputStream out = context.getContentResolver().openOutputStream(destUri)) {
+            if (out == null) throw new IOException("Failed to open output stream");
+            BufferedOutputStream bos = new BufferedOutputStream(out);
+            Bitmap.CompressFormat format;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                format = Bitmap.CompressFormat.WEBP_LOSSY;
+            } else {
+                //noinspection deprecation
+                format = Bitmap.CompressFormat.WEBP;
+            }
+            thumb.compress(format, 50, bos);
+            bos.flush();
+        } finally {
             thumb.recycle();
         }
     }

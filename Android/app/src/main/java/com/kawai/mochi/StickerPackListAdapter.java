@@ -31,10 +31,11 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
     private final OnAddButtonClickedListener onAddButtonClickedListener;
     private int maxNumberOfStickersInARow;
     private int minMarginBetweenImages;
-    private boolean isScrolling;
-    
+
     private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
-    Boolean animationsEnabledCache = null;
+
+    private boolean animationsEnabledCache;
+    private boolean animationsCacheValid = false;
 
     StickerPackListAdapter(@NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
         super(new DiffUtil.ItemCallback<StickerPack>() {
@@ -45,7 +46,6 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
 
             @Override
             public boolean areContentsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
-                // If anything that affects UI changes, return false
                 if (!oldItem.name.equals(newItem.name)) return false;
                 if (!oldItem.publisher.equals(newItem.publisher)) return false;
                 if (oldItem.getTotalSize() != newItem.getTotalSize()) return false;
@@ -53,21 +53,20 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
                 int oldCount = oldItem.getStickers() != null ? oldItem.getStickers().size() : 0;
                 int newCount = newItem.getStickers() != null ? newItem.getStickers().size() : 0;
                 if (oldCount != newCount) return false;
+                if (oldCount > 0) {
+                    for (int i = 0; i < oldCount; i++) {
+                        if (!oldItem.getStickers().get(i).imageFileName
+                                .equals(newItem.getStickers().get(i).imageFileName)) {
+                            return false;
+                        }
+                    }
+                }
                 return true;
             }
         });
         this.onAddButtonClickedListener = onAddButtonClickedListener;
         setHasStableIds(true);
-        // Keep the nested preview pool modest to avoid bitmap/view churn.
         sharedPool.setMaxRecycledViews(0, 8);
-    }
-
-    public void setScrolling(boolean isScrolling) {
-        if (this.isScrolling != isScrolling) {
-            this.isScrolling = isScrolling;
-            // Efficiently notify only about the scroll state change
-            notifyItemRangeChanged(0, getItemCount(), "scroll_state_change");
-        }
     }
 
     @Override
@@ -87,24 +86,12 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
     }
 
     @Override
-    public void onBindViewHolder(@NonNull StickerPackListItemViewHolder holder, int position, @NonNull List<Object> payloads) {
-        if (payloads.contains("scroll_state_change")) {
-            if (holder.previewAdapter != null) {
-                holder.previewAdapter.setScrolling(isScrolling);
-            }
-        } else {
-            super.onBindViewHolder(holder, position, payloads);
-        }
-    }
-
-    @Override
     public void onBindViewHolder(@NonNull final StickerPackListItemViewHolder viewHolder, final int index) {
         StickerPack pack = getItem(index);
         final Context context = viewHolder.titleView.getContext();
 
         int count = pack.getStickers() != null ? pack.getStickers().size() : 0;
         viewHolder.countView.setText(context.getString(R.string.sticker_count, count));
-
         viewHolder.titleView.setText(pack.name);
         if (viewHolder.publisherView != null) {
             viewHolder.publisherView.setText(pack.publisher);
@@ -121,31 +108,51 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
         });
 
         setAddButtonAppearance(viewHolder.addButton, pack);
-        viewHolder.animatedStickerPackIndicator.setVisibility(pack.animatedStickerPack ? View.VISIBLE : View.GONE);
+        viewHolder.animatedStickerPackIndicator.setVisibility(
+                pack.animatedStickerPack ? View.VISIBLE : View.GONE);
 
         if (pack.getStickers() != null && maxNumberOfStickersInARow > 0) {
-            final int previewSize = context.getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
+            final int previewSize = context.getResources()
+                    .getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
             int numToShow = Math.min(maxNumberOfStickersInARow, pack.getStickers().size());
             List<Sticker> previewStickers = pack.getStickers().subList(0, numToShow);
-            
-            if (animationsEnabledCache == null) {
+
+            if (!animationsCacheValid) {
                 animationsEnabledCache = SettingsActivity.isAnimationsEnabled(context);
+                animationsCacheValid = true;
             }
             boolean animationsEnabled = animationsEnabledCache;
 
-            if (viewHolder.previewAdapter != null) {
-                viewHolder.previewAdapter.updateData(previewStickers, pack.identifier,
+            StickerPreviewAdapter adapter = viewHolder.previewAdapter;
+
+            if (adapter != null) {
+                // Update existing adapter with new data
+                adapter.updateData(previewStickers, pack.identifier,
                         previewSize, minMarginBetweenImages,
-                        pack.animatedStickerPack, animationsEnabled, isScrolling);
+                        pack.animatedStickerPack, animationsEnabled);
             } else {
-                StickerPreviewAdapter adapter = new StickerPreviewAdapter(
-                        previewStickers, pack.identifier, previewSize,
-                        minMarginBetweenImages, pack.animatedStickerPack, animationsEnabled, false, null);
-                adapter.setScrolling(isScrolling);
+                // Create new adapter (with Context)
+                adapter = new StickerPreviewAdapter(
+                        context,
+                        previewStickers,
+                        pack.identifier,
+                        previewSize,
+                        minMarginBetweenImages,
+                        pack.animatedStickerPack,
+                        animationsEnabled,
+                        false,
+                        null);
                 viewHolder.previewAdapter = adapter;
                 viewHolder.imageRowView.setAdapter(adapter);
             }
+
             viewHolder.imageRowView.setVisibility(View.VISIBLE);
+
+            // ---- PREFETCH THUMBNAILS IN BACKGROUND ----
+            final StickerPreviewAdapter finalAdapter = adapter;
+            new Thread(() -> finalAdapter.prefetchThumbnails()).start();
+            // -----------------------------------------
+
         } else {
             viewHolder.imageRowView.setVisibility(View.GONE);
         }
@@ -174,7 +181,7 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
     }
 
     void invalidateAnimationsCache() {
-        animationsEnabledCache = null;
+        animationsCacheValid = false;
     }
 
     public interface OnAddButtonClickedListener {

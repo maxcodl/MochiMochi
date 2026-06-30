@@ -1,16 +1,9 @@
-/*
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- * All rights reserved.
- *
- * This source code is licensed under the BSD-style license found in the
- * LICENSE file in the root directory of this source tree.
- */
-
 package com.kawai.mochi;
 
 import android.app.ActivityManager;
 import android.app.Application;
 import android.content.Context;
+import android.content.SharedPreferences;
 
 import com.facebook.common.internal.Supplier;
 import com.facebook.drawee.backends.pipeline.Fresco;
@@ -19,6 +12,8 @@ import com.facebook.imagepipeline.core.DefaultExecutorSupplier;
 import com.facebook.imagepipeline.core.ImagePipelineConfig;
 
 public class StickerApplication extends Application {
+
+    private static final String PREFS_NAME = "mochi_prefs";
 
     @Override
     public void onCreate() {
@@ -50,15 +45,17 @@ public class StickerApplication extends Application {
 
         new Thread(() -> {
             try {
-                android.content.Context appCtx = getApplicationContext();
+                Context appCtx = getApplicationContext();
                 WastickerParser.seedBundledPacksIfNeeded(appCtx);
                 WastickerParser.fixAnimatedPackFlagsIfNeeded(appCtx);
+                // ⭐ Generate thumbnails for all existing packs (one-time)
+                WastickerParser.generateMissingThumbnails(appCtx);
             } catch (Exception e) {
                 android.util.Log.e("StickerApplication", "Initialization failed", e);
             }
         }, "AppInit").start();
 
-        android.content.SharedPreferences prefs = getSharedPreferences("mochi_prefs", MODE_PRIVATE);
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         int themeMode = prefs.getInt("theme_mode", androidx.appcompat.app.AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         androidx.appcompat.app.AppCompatDelegate.setDefaultNightMode(themeMode);
     }

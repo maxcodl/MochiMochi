@@ -227,6 +227,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         if (stickerPreviewAdapter == null) {
             boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(this);
             stickerPreviewAdapter = new StickerPreviewAdapter(
+                    this,  // <-- FIX: added Context as first argument
                     stickerPack.getStickers(),
                     stickerPack.identifier,
                     getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_size),
@@ -495,8 +496,7 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
 
     @Override
     protected void onResume() {
-        super.onResume()
-        ;
+        super.onResume();
         whitelistCheckCancelled = false;
         WeakReference<StickerPackDetailsActivity> ref = new WeakReference<>(this);
         final String id = stickerPack.identifier;

@@ -180,15 +180,21 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                 error = e.getMessage();
             }
             final String finalError = error;
-            mainHandler.post(() -> {
+           mainHandler.post(() -> {
                 if (progressDialog.isShowing()) progressDialog.dismiss();
                 EditStickerPackActivity activity = ref.get();
                 if (activity == null) return;
+                
                 if (finalError != null) {
                     Toast.makeText(activity, getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
                 } else {
                     Toast.makeText(activity, activity.isEditMode ?
                             R.string.edit_saved : R.string.pack_created, Toast.LENGTH_SHORT).show();
+                    
+                    // TRIGGER THE APP-WIDE REFRESH HERE!
+                    // This fires after the file is saved, but right before the screen closes
+                    StickerUpdateManager.INSTANCE.notifyStickersChanged();
+                    
                     activity.setResult(201);
                     activity.finish();
                 }
