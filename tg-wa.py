@@ -104,8 +104,32 @@ def _cfg(key: str):
     return CONFIG.get(key, CONFIG_DEFAULTS[key])
 
 # ── WhatsApp sticker hard limits ─────────────────────────────────────────────
-WA_MAX_BYTES   = 488 * 1024
-WA_ANIM_TARGET = 460 * 1024
+# NOTE: WhatsApp's own limit is exactly 500,000 bytes (decimal), not 500KiB
+# (500*1024=512000) or 499*1024=510976 as this used to say. That KiB/KB mix-up
+# let the encoder produce files up to ~11KB over the real cap — they'd pass
+# every check in this script but still get rejected by the app with
+# "exceeds 500,000 bytes". Keep these as plain decimal byte counts.
+WA_MAX_BYTES   = 499_000
+WA_ANIM_TARGET = 494_000
+
+# WhatsApp's official cap: "Animation duration should be less than or equal
+# to 10 seconds total" (WhatsApp/stickers repo, Android/iOS README). This is
+# a PACK-LEVEL check on WhatsApp's own side — if even one sticker in a pack
+# (or in one auto-split ~30-sticker chunk) exceeds this, WhatsApp rejects the
+# whole chunk with a generic "problem with the sticker pack" /
+# "handleStickerPackPreviewResult/failed" error, not a per-sticker message.
+# Kept at 9800ms (200ms safety margin below the hard 10000ms limit) since our
+# own frame-count math can round up to just over 10000ms otherwise.
+WA_MAX_ANIM_DURATION_MS = 9_800
+
+# ── Sticker thumbnail settings ────────────────────────────────────────────────
+# Generated once here, at pack-creation time, instead of on-device during
+# import. MUST match StickerProcessor.THUMB_SIZE on the Android side, or
+# packs built by this bot will show a different thumbnail resolution than
+# packs whose thumbnails were generated on-device (e.g. via the "regenerate
+# thumbnails" migration path, or packs merged from older imports).
+STICKER_THUMB_SIZE = 100
+STICKER_THUMB_QUALITY = 80
 
 # ── Shared HTTP session ───────────────────────────────────────────────────────
 _HTTP_SESSION: aiohttp.ClientSession | None = None
@@ -118,13 +142,51 @@ async def _get_http_session() -> aiohttp.ClientSession:
     return _HTTP_SESSION
 
 async def _run_cpu_bound(func, *args):
-    """Run CPU-heavy sync work in a worker thread to avoid blocking the event loop."""
+    """Run CPU-heavy sync work in a worker thread to avoid blocking the event loop.
+
+    Uses _get_cpu_pool() (sized from config["max_concurrent"]) instead of the
+    default executor (loop.run_in_executor(None, ...)). The default executor
+    is a hidden, fixed-size ThreadPoolExecutor (min(32, os.cpu_count()+4))
+    that's created once and never re-reads CONFIG — so bumping max_concurrent
+    in /settings previously had *no effect* on the actual WebP-encode /
+    ffmpeg.probe work done here, only on the asyncio.Semaphore gating how many
+    stickers get dispatched in the first place. Encodes just piled up on the
+    same unconfigurable pool regardless of the settings.
+    """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: func(*args))
+    return await loop.run_in_executor(_get_cpu_pool(), lambda: func(*args))
 
 def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
     img = Image.open(BytesIO(sticker_data))
     return convert_to_whatsapp_static(img)
+
+def generate_thumbnail_from_webp_bytes(webp_bytes: bytes, thumb_size: int = STICKER_THUMB_SIZE) -> bytes:
+    """
+    Builds a small static WebP thumbnail from an already-converted sticker's
+    final WebP bytes. Works for both static and animated input — for animated
+    WebP, only frame 0 is used (PIL defaults to frame 0 on open/seek(0)),
+    matching how a sticker list preview is meant to look.
+
+    This runs on bytes we already have in memory post-conversion, so it's a
+    cheap extra resize rather than a fresh decode from disk. Generating it
+    here means the Android app can just copy this file into the pack folder
+    on import instead of decoding + resizing + re-encoding every sticker
+    on-device (the slow part on SAF/SD-card-backed folders).
+    """
+    img = Image.open(BytesIO(webp_bytes))
+    try:
+        img.seek(0)
+    except Exception:
+        pass
+    img = img.convert("RGBA")
+    frame = img.copy()
+    frame.thumbnail((thumb_size, thumb_size), Image.LANCZOS)
+    canvas = Image.new("RGBA", (thumb_size, thumb_size), (0, 0, 0, 0))
+    position = ((thumb_size - frame.width) // 2, (thumb_size - frame.height) // 2)
+    canvas.paste(frame, position, frame)
+    out = BytesIO()
+    canvas.save(out, format="WEBP", quality=STICKER_THUMB_QUALITY, method=4)
+    return out.getvalue()
 
 # ── ProcessPoolExecutor (lazy, size driven by config) ────────────────────────
 _PROCESS_POOL: concurrent.futures.ProcessPoolExecutor | None = None
@@ -146,6 +208,36 @@ def _rebuild_process_pool(workers: int):
     _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(max_workers=workers)
     logger.info(f"ProcessPoolExecutor rebuilt with max_workers={workers}")
 
+# ── ThreadPoolExecutor for general CPU-bound work (lazy, size driven by config) ──
+# Used by _run_cpu_bound() for WebP encoding and ffmpeg.probe() — the actual
+# per-sticker heavy lifting for video/webm-based animated stickers (most
+# Telegram animated packs), which never touches _PROCESS_POOL at all since
+# that one's reserved for TGS/Lottie rendering only.
+#
+# A thread pool (not a process pool) is used deliberately here: Pillow's
+# libwebp encoder is a C extension that releases the GIL during save(), so
+# threads DO get real parallelism for the encode step without the cost of
+# pickling full lists of 512x512 RGBA PIL.Image frames across a process
+# boundary on every call (which a ProcessPoolExecutor would require).
+_CPU_POOL: concurrent.futures.ThreadPoolExecutor | None = None
+
+def _get_cpu_pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _CPU_POOL
+    workers = _cfg("max_concurrent")
+    if _CPU_POOL is None:
+        _CPU_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        logger.info(f"CPU ThreadPoolExecutor created with max_workers={workers}")
+    return _CPU_POOL
+
+def _rebuild_cpu_pool(workers: int):
+    """Shut down the existing CPU pool and create a new one with updated worker count."""
+    global _CPU_POOL
+    if _CPU_POOL is not None:
+        _CPU_POOL.shutdown(wait=False)
+        _CPU_POOL = None
+    _CPU_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    logger.info(f"CPU ThreadPoolExecutor rebuilt with max_workers={workers}")
+
 # ── Authorised chats ──────────────────────────────────────────────────────────
 def save_authorized_chats():
     try:
@@ -163,6 +255,12 @@ def sanitize_filename(name: str) -> str:
     name = re.sub(r'[<>:"/\\|?*]', '', name)
     name = re.sub(r'[\s-]+', '_', name).strip("_")
     return name[:50] if name else "sticker_pack"
+
+def _format_elapsed(seconds: float) -> str:
+    """Human-readable elapsed time for pack captions, e.g. '8m 12s' or '43s'."""
+    total = int(round(seconds))
+    m, s = divmod(total, 60)
+    return f"{m}m {s}s" if m else f"{s}s"
 
 # ── WebP helpers ──────────────────────────────────────────────────────────────
 def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[bool, str]:
@@ -431,6 +529,61 @@ def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
 
     raise Exception("Could not encode one-frame animation under 500KB")
 
+def _estimate_starting_decimation(pil_frames: list, max_size: int) -> int:
+    """
+    Estimate whether full frame rate (decimation=1x) can possibly fit before
+    committing to it, and only recommend dropping frames if it genuinely
+    cannot — even at the encoder's floor quality. Dropping frames is far more
+    noticeable to a viewer than dropping quality ("choppy" vs "a bit soft"),
+    so this samples at the LOWEST quality the encoder will ever try (12)
+    rather than a mid-range quality — that way full frame rate only gets
+    skipped when there's truly no path to fitting under the size limit
+    without losing frames, not just because a higher-quality guess looked big.
+    """
+    n = len(pil_frames)
+    if n < 2:
+        return 1
+
+    # Sample up to 6 evenly spaced frames for a fast size estimate
+    sample_count = min(6, n)
+    step = max(1, n // sample_count)
+    sample_frames = pil_frames[::step][:sample_count]
+    if len(sample_frames) < 2:
+        sample_frames = pil_frames[:2]
+
+    try:
+        buf = BytesIO()
+        sample_frames[0].save(
+            buf, format="WEBP", save_all=True,
+            append_images=sample_frames[1:],
+            duration=50, loop=0, quality=12, method=6, alpha_quality=70,
+            background=(0, 0, 0, 0),
+        )
+        sample_size = buf.tell()
+        # Extrapolate at floor quality — small margin since we're already at
+        # the bottom of the quality range and can't shrink much further.
+        estimated_full = int(sample_size * (n / len(sample_frames)) * 1.05)
+        logger.debug(f"Floor-quality size estimate: sample={sample_size//1024}KB over {len(sample_frames)} frames → "
+                     f"estimated full={estimated_full//1024}KB over {n} frames")
+
+        if estimated_full <= max_size:
+            return 1
+
+        for decimation in [2, 3, 4]:
+            estimated = estimated_full // decimation
+            if estimated <= max_size:
+                logger.info(
+                    f"Even at floor quality, full frame rate estimated at "
+                    f"{estimated_full//1024}KB > {max_size//1024}KB limit — "
+                    f"starting at decimation={decimation}x"
+                )
+                return decimation
+        return 4
+    except Exception as e:
+        logger.debug(f"Size estimation failed ({e}), starting at decimation=1x")
+        return 1
+
+
 def _encode_animated_webp_under_limit(
     pil_frames: list,
     frame_duration_ms: int,
@@ -462,7 +615,40 @@ def _encode_animated_webp_under_limit(
                 return buf, q, sz, method
         return None, None, 0, None
 
-    decimation_levels = [1, 2, 3, 4]
+    def _predict_quality(frames, dur_ms, method=4, alpha_q=80):
+        """
+        Cheaply estimate roughly which quality value will land closest to
+        max_size for THIS frame count, using two small samples (quality 20
+        and 60) to build a rough linear size-vs-quality model, instead of
+        blindly scanning the whole ladder from the top every time. This is
+        what actually cuts encode time — the old code always started probing
+        at quality=72 regardless of how likely that was to succeed.
+        """
+        n = len(frames)
+        sample_count = min(6, n)
+        step = max(1, n // sample_count)
+        samples = frames[::step][:sample_count]
+        if len(samples) < 2:
+            samples = frames[:2]
+        try:
+            hi_buf = _try(samples, dur_ms, 60, method, alpha_q)
+            lo_buf = _try(samples, dur_ms, 20, method, alpha_q)
+            full_hi = hi_buf.tell() * n / len(samples)
+            full_lo = lo_buf.tell() * n / len(samples)
+            slope = (full_hi - full_lo) / 40.0  # bytes per quality point
+            if slope <= 0:
+                return 40
+            target = max_size * 0.92  # small safety margin below the hard cap
+            q = 20 + (target - full_lo) / slope
+            return int(max(12, min(72, q)))
+        except Exception:
+            return 40
+
+    # Pick a smart starting decimation level based on a fast size estimate,
+    # avoiding wasted encode attempts that are statistically certain to fail.
+    start_decimation = _estimate_starting_decimation(pil_frames, max_size)
+
+    decimation_levels = [d for d in [1, 2, 3, 4] if d >= start_decimation]
     for decimation in decimation_levels:
         if decimation == 1:
             cur_frames = pil_frames
@@ -478,16 +664,39 @@ def _encode_animated_webp_under_limit(
                 f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
             )
 
-        best_buf, best_q, best_size, used_method = _quality_search(
-            cur_frames, cur_dur, qualities=[72, 58, 46, 34, 24], method=0,
-        )
-        if best_buf is None and decimation >= 2:
-            best_buf, best_q, best_size, used_method = _quality_search(
-                cur_frames, cur_dur, qualities=[50, 38, 28, 20], method=4,
+        # FIX: WhatsApp hard-rejects a whole pack chunk if ANY sticker's total
+        # animation duration exceeds ~10s (see WA_MAX_ANIM_DURATION_MS above).
+        # This is independent of frame count/quality/size — a sticker can pass
+        # every other check and still trigger a pack-level "problem with the
+        # sticker pack" error on WhatsApp's side purely from running too long
+        # in real time. Truncate trailing frames (not resample) so we keep
+        # full smoothness on the frames we do show, and just cut the tail —
+        # cheaper than dropping frames throughout and still under 2 frames
+        # only in pathological single-frame-duration-over-cap cases.
+        max_frames_for_duration = max(2, WA_MAX_ANIM_DURATION_MS // cur_dur)
+        if len(cur_frames) > max_frames_for_duration:
+            logger.info(
+                f"Trimming {len(cur_frames)} → {max_frames_for_duration} frames to stay "
+                f"under WhatsApp's {WA_MAX_ANIM_DURATION_MS}ms animation duration cap "
+                f"({cur_dur}ms/frame would otherwise total {len(cur_frames) * cur_dur}ms)"
             )
-        if best_buf is None and decimation >= 2:
+            cur_frames = cur_frames[:max_frames_for_duration]
+
+        # Jump straight to roughly the right quality instead of scanning the
+        # ladder from the top — only a handful of step-downs from there.
+        predicted_q = _predict_quality(cur_frames, cur_dur)
+        candidates = sorted(
+            {q for q in (predicted_q, predicted_q - 10, predicted_q - 20, predicted_q - 32, 12) if 12 <= q <= 72},
+            reverse=True,
+        )
+        best_buf, best_q, best_size, used_method = _quality_search(
+            cur_frames, cur_dur, qualities=candidates, method=4, alpha_q=80,
+        )
+        # Last-resort single attempt at the true floor with the slowest but
+        # most efficient compression method, only if the fast path missed.
+        if best_buf is None and 12 not in candidates:
             best_buf, best_q, best_size, used_method = _quality_search(
-                cur_frames, cur_dur, qualities=[26, 20, 16, 12], method=6, alpha_q=70,
+                cur_frames, cur_dur, qualities=[12], method=6, alpha_q=65,
             )
 
         if best_buf is not None:
@@ -537,7 +746,7 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
     except Exception:
         fps, in_point, out_point = 30.0, 0, 90
 
-    render_frames     = min(max(1, out_point - in_point), int(10.0 * fps), 120)
+    render_frames     = min(max(1, out_point - in_point), int(WA_MAX_ANIM_DURATION_MS / 1000.0 * fps), 120)
     frame_duration_ms = max(8, int(1000.0 / fps))
 
     pil_frames = None
@@ -629,7 +838,16 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         target_fps = min(input_fps, 20.0)
         target_fps = max(target_fps, 8.0)
         frame_duration_ms = max(8, int(1000.0 / target_fps))
-        max_frames = min(240, int(10000 / frame_duration_ms))
+        max_frames = min(240, int(WA_MAX_ANIM_DURATION_MS / frame_duration_ms))
+
+        # NOTE: we deliberately do NOT pre-halve fps at extraction time based
+        # on a frame-count guess. The encoder (_encode_animated_webp_under_limit)
+        # now exhausts its full quality ladder at full frame rate before ever
+        # dropping frames, so pre-halving here would just bake in choppiness
+        # for stickers that would otherwise have fit fine at full smoothness —
+        # it's no longer a safe assumption that decimation will be needed.
+        estimated_frames = int(duration * target_fps) if duration > 0 else max_frames
+        logger.debug(f"Estimated ~{estimated_frames} frames at {target_fps:.1f}fps")
 
         # Pass ffmpeg_threads from config so users can tune CPU load
         ffmpeg_threads = _cfg("ffmpeg_threads")
@@ -1132,6 +1350,15 @@ async def create_wastickers_zip(
             with open(sticker_path, 'wb') as f:
                 f.write(result['bytes'])
 
+            # Pre-generate the thumbnail alongside the sticker itself, so packs
+            # built via this (non-return_valid_results) path also carry one.
+            try:
+                thumb_bytes = generate_thumbnail_from_webp_bytes(result['bytes'])
+                with open(work_dir / f"thumb_{sticker_filename}", 'wb') as f:
+                    f.write(thumb_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to generate thumbnail for {sticker_filename}: {e}")
+
             emoji_map[sticker_filename] = result['emoji_list']
             valid_entries.append({
                 'file_id': result['file_id'],
@@ -1195,12 +1422,25 @@ def _build_wasticker_zip_from_valid_entries(
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
 
         emoji_map = {}
-        for entry in filtered_entries:
-            sticker_filename = f"{set_name}_{entry['file_id'][-12:]}.webp"
+        for idx, entry in enumerate(filtered_entries, start=1):
+            sticker_filename = f"sticker_{idx}.webp"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(entry['bytes'])
             emoji_map[sticker_filename] = entry['emoji_list']
+
+            # Pre-generate the thumbnail here, at pack-build time on the bot,
+            # instead of leaving it for the Android app to decode/resize/
+            # re-encode on-device during import. The app just needs to see
+            # "thumb_<filename>" already sitting next to the sticker and copy
+            # it in — see WastickerParser.importStickerPack() on the app side.
+            try:
+                thumb_bytes = generate_thumbnail_from_webp_bytes(entry['bytes'])
+                thumb_path = work_dir / f"thumb_{sticker_filename}"
+                with open(thumb_path, 'wb') as f:
+                    f.write(thumb_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to generate thumbnail for {sticker_filename}: {e}")
 
         emojis_json_path = work_dir / "emojis.json"
         with open(emojis_json_path, 'w', encoding='utf-8') as f:
@@ -1267,17 +1507,6 @@ async def list_authorized_chats(client: Client, message: Message):
         await message.reply_text(f"Authorized chats:\n`{chats_list}`")
 
 # ── /settings command ─────────────────────────────────────────────────────────
-# Owner-only. Lets you tune how many resources the bot uses during conversion.
-#
-# Settings:
-#   max_concurrent      — how many stickers are downloaded/converted in parallel
-#   process_pool_workers — how many CPU worker processes render TGS animations
-#   ffmpeg_threads      — how many threads ffmpeg uses to decode video stickers
-#   tgs_render_timeout  — seconds before a TGS render is aborted
-#
-# Each setting has a floor and ceiling to prevent the bot from thrashing or
-# deadlocking. Raising values speeds up conversion but uses more CPU/RAM.
-
 _SETTINGS_META = {
     "max_concurrent": {
         "label": "Parallel",
@@ -1351,6 +1580,7 @@ async def settings_callback(client: Client, callback_query):
         CONFIG.update(CONFIG_DEFAULTS)
         _save_config(CONFIG)
         _rebuild_process_pool(_cfg("process_pool_workers"))
+        _rebuild_cpu_pool(_cfg("max_concurrent"))
         await callback_query.answer("Reset to defaults.")
         try:
             await callback_query.message.edit_text(_settings_text(), reply_markup=_settings_keyboard())
@@ -1378,9 +1608,10 @@ async def settings_callback(client: Client, callback_query):
     CONFIG[key] = new_val
     _save_config(CONFIG)
 
-    # If process pool workers changed, rebuild the pool immediately
     if key == "process_pool_workers":
         _rebuild_process_pool(new_val)
+    if key == "max_concurrent":
+        _rebuild_cpu_pool(new_val)
 
     await callback_query.answer(f"{meta['label']} → {new_val}{meta['unit']}")
     try:
@@ -1469,12 +1700,15 @@ async def loadsticker_command(client: Client, message: Message):
         tray_bytes = await _run_cpu_bound(optimize_tray_icon, converted_bytes, False)
         await msg.edit_text("📦 Packaging .wasticker file...")
 
+        thumb_bytes = await _run_cpu_bound(generate_thumbnail_from_webp_bytes, converted_bytes)
+
         wasticker_bio = BytesIO()
         with zipfile.ZipFile(wasticker_bio, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.writestr('title.txt', pack_title)
             zipf.writestr('author.txt', author_name)
             zipf.writestr('tray.png', tray_bytes.getvalue())
             zipf.writestr('sticker_001.webp', converted_bytes)
+            zipf.writestr('thumb_sticker_001.webp', thumb_bytes)
         wasticker_bio.seek(0)
 
         wasticker_name = f"{sanitize_filename(pack_title)}.idwasticker"
@@ -1557,6 +1791,7 @@ async def process_stickers(
     from_user_id: int
 ):
     try:
+        _pack_start_time = time.monotonic()
         set_name_sanitized = sanitize_filename(set_title)
         if not stickers:
             await msg.edit_text("No stickers provided.")
@@ -1590,11 +1825,12 @@ async def process_stickers(
             )
             await msg.edit_text("Uploading ZIP file...")
             mode_desc = "Raw stickers" if skip_conversion else "Converted stickers"
+            elapsed = _format_elapsed(time.monotonic() - _pack_start_time)
             await client.send_document(
                 chat_id=target_chat,
                 document=str(zip_path),
                 file_name=zip_path.name,
-                caption=f"{mode_desc}: {valid_count} files\n{set_title}",
+                caption=f"{mode_desc}: {valid_count} files\n{set_title}\nConverted in {elapsed}",
                 disable_notification=True
             )
             try:
@@ -1643,7 +1879,8 @@ async def process_stickers(
             return
 
         internal_name = f"{set_name_sanitized}_{type_letter}"
-        zip_path = _build_wasticker_zip_from_valid_entries(
+        zip_path = await _run_cpu_bound(
+            _build_wasticker_zip_from_valid_entries,
             internal_name, optimized_tray_bytes, valid_entries, set_title, author_name, has_animated,
         )
 
@@ -1662,6 +1899,9 @@ async def process_stickers(
                         caption += f"\n- {count}x {reason}"
         if valid_count_total > 30:
             caption += f"\n\n{valid_count_total} stickers"
+
+        elapsed = _format_elapsed(time.monotonic() - _pack_start_time)
+        caption += f"\nConverted in {elapsed}"
 
         try:
             await msg.edit_text(f"Uploading {type_name} pack ({valid_count_total} stickers)...")
@@ -1688,7 +1928,18 @@ async def process_stickers(
             logger.warning(f"Cleanup error: {ce}")
 
         try:
-            await msg.reply_text(f"✅ Successfully sent {valid_count_total} stickers!")
+            sent_success_msg = await msg.reply_text(f"Successfully sent {valid_count_total} stickers!")
+
+            async def _delete_after_delay(target_msg, delay_secs: float = 10.0):
+                try:
+                    await asyncio.sleep(delay_secs)
+                    await target_msg.delete()
+                except Exception as de:
+                    logger.debug(f"Could not auto-delete success message: {de}")
+
+            # Fire-and-forget: don't block the handler (or the semaphore slot
+            # it's running under) for 10s just to clean up a status message.
+            asyncio.create_task(_delete_after_delay(sent_success_msg))
         except Exception:
             pass
 
@@ -1740,7 +1991,7 @@ async def convert_pack(client: Client, message: Message):
         mode_text = " (Raw ZIP)" if (use_simple_zip and skip_conversion) else " (Converted ZIP)" if use_simple_zip else ""
         name_text = f" as **{custom_name}**" if custom_name else ""
         msg = await message.reply_text(
-            f"⏳ Send stickers one by one to create a pack{name_text}{mode_text}.\n\nStickers added: 0",
+            f"Send stickers one by one to create a pack{name_text}{mode_text}.\n\nStickers added: 0",
             reply_markup=keyboard
         )
         active_sticker_sessions[session_key] = {
@@ -1807,7 +2058,6 @@ async def handle_individual_stickers(client: Client, message: Message):
     session_key = (message.chat.id, message.from_user.id)
     if session_key not in active_sticker_sessions:
         return
-    # Inline TTL check (background task handles bulk pruning)
     if time.monotonic() - active_sticker_sessions[session_key].get("created_at", 0) > _SESSION_TTL:
         active_sticker_sessions.pop(session_key, None)
         return
@@ -2062,10 +2312,6 @@ async def process_zip_upload(client: Client, message: Message):
             extract_dir = tmp_path / "extracted"
             extract_dir.mkdir()
 
-            # FIX: extract member-by-member (not extractall) to properly enforce Zip Slip guard.
-            # The original code validated all members then called extractall() — a TOCTOU gap
-            # where a symlink bomb could bypass the check. We now extract each entry individually
-            # immediately after validating it.
             extract_dir_resolved = extract_dir.resolve()
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 for member in zip_ref.infolist():
@@ -2191,7 +2437,7 @@ async def process_zip_upload(client: Client, message: Message):
     except Exception as e:
         logger.error(f"ZIP processing failed: {e}")
         try:
-            await msg.edit_text(f"❌ Processing failed: {str(e)}")
+            await msg.edit_text(f"Processing failed: {str(e)}")
         except Exception:
             pass
 
@@ -2200,10 +2446,13 @@ if __name__ == "__main__":
     import atexit
 
     def _shutdown():
-        global _HTTP_SESSION, _PROCESS_POOL
+        global _HTTP_SESSION, _PROCESS_POOL, _CPU_POOL
         if _PROCESS_POOL is not None:
             _PROCESS_POOL.shutdown(wait=False)
             _PROCESS_POOL = None
+        if _CPU_POOL is not None:
+            _CPU_POOL.shutdown(wait=False)
+            _CPU_POOL = None
         if _HTTP_SESSION is not None and not _HTTP_SESSION.closed:
             import asyncio as _asyncio
             try:

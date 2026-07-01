@@ -483,11 +483,34 @@ public class WastickerParser {
                             File src = new File(tempDir, imageFile);
                             if (src.exists()) {
                                 copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
-                                try {
-                                    generateThumbnailForSticker(context, identifier, imageFile);
-                                } catch (IOException e) {
-                                    Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e);
+
+                                // Prefer a thumbnail the bot already generated and shipped
+                                // inside the .wasticker zip (thumb_<imageFile>) — just copy
+                                // it in. Only fall back to generating one on-device (slow:
+                                // decode + resize + re-encode, plus extra SAF round-trips)
+                                // for packs from an older bot version that didn't include one.
+                                String thumbFileName = "thumb_" + imageFile;
+                                File thumbSrc = new File(tempDir, thumbFileName);
+                                if (thumbSrc.exists()) {
+                                    try {
+                                        copyToPackFolder(context, thumbSrc, identifier, thumbFileName, packDirDoc);
+                                    } catch (IOException e) {
+                                        Log.w(TAG, "Failed to copy pre-generated thumbnail for " + imageFile
+                                                + ", falling back to on-device generation", e);
+                                        try {
+                                            generateThumbnailForSticker(context, identifier, imageFile);
+                                        } catch (IOException e2) {
+                                            Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e2);
+                                        }
+                                    }
+                                } else {
+                                    try {
+                                        generateThumbnailForSticker(context, identifier, imageFile);
+                                    } catch (IOException e) {
+                                        Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e);
+                                    }
                                 }
+
                                 if (!detectedAnimated) {
                                     try {
                                         StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(src);
@@ -553,15 +576,27 @@ public class WastickerParser {
                                          DocumentFile packDirDoc) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            DocumentFile packDir = packDirDoc;
-            if (packDir == null) {
-                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
-                packDir = root != null ? root.findFile(packId) : null;
+            DocumentFile destFile;
+            StickerContentProvider provider = StickerContentProvider.getInstance();
+            if (provider != null) {
+                // Cache-coherent path: avoids the findFile()/findFile()/createFile()
+                // chain (2-3 SAF IPC round-trips per sticker, each one listing every
+                // file already in the pack folder) that this same fix already solved
+                // for thumbnail generation. This was the missing half of that fix —
+                // it made bulk *sticker* import slow on SD-card-backed folders,
+                // scaling worse the more stickers were already in the pack.
+                destFile = provider.getOrCreateSafFileCached(context, packId, fileName, "image/*");
+            } else {
+                // Fallback: provider not yet created, use direct (uncached) lookups.
+                DocumentFile packDir = packDirDoc;
+                if (packDir == null) {
+                    DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+                    packDir = root != null ? root.findFile(packId) : null;
+                }
+                if (packDir == null) throw new IOException("Pack directory not found: " + packId);
+                destFile = packDir.findFile(fileName);
+                if (destFile == null) destFile = packDir.createFile("image/*", fileName);
             }
-            if (packDir == null) throw new IOException("Pack directory not found: " + packId);
-
-            DocumentFile destFile = packDir.findFile(fileName);
-            if (destFile == null) destFile = packDir.createFile("image/*", fileName);
             if (destFile == null) throw new IOException("Could not create file: " + fileName);
 
             try (InputStream is = new FileInputStream(src);
