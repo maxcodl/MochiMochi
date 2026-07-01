@@ -431,6 +431,55 @@ def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
 
     raise Exception("Could not encode one-frame animation under 500KB")
 
+def _estimate_starting_decimation(pil_frames: list, max_size: int) -> int:
+    """
+    Estimate the minimum decimation level needed before trying any expensive
+    encode attempts. Samples a small number of frames, encodes them at a
+    mid-range quality, extrapolates the full size, and picks the lowest
+    decimation level likely to fit under max_size. This avoids wasting 10-15s
+    on doomed full-frame encode attempts for large/complex stickers.
+    """
+    n = len(pil_frames)
+    if n < 2:
+        return 1
+
+    # Sample up to 6 evenly spaced frames for a fast size estimate
+    sample_count = min(6, n)
+    step = max(1, n // sample_count)
+    sample_frames = pil_frames[::step][:sample_count]
+    if len(sample_frames) < 2:
+        sample_frames = pil_frames[:2]
+
+    try:
+        buf = BytesIO()
+        sample_frames[0].save(
+            buf, format="WEBP", save_all=True,
+            append_images=sample_frames[1:],
+            duration=50, loop=0, quality=60, method=0,
+            background=(0, 0, 0, 0),
+        )
+        sample_size = buf.tell()
+        # Extrapolate: full encode at same quality ≈ sample_size * (n / len(sample_frames))
+        # Add 15% margin since quality search starts higher than 60
+        estimated_full = int(sample_size * (n / len(sample_frames)) * 1.15)
+        logger.debug(f"Size estimate: sample={sample_size//1024}KB over {len(sample_frames)} frames → "
+                     f"estimated full={estimated_full//1024}KB over {n} frames")
+
+        for decimation in [1, 2, 3, 4]:
+            estimated = estimated_full // decimation
+            if estimated <= max_size:
+                if decimation > 1:
+                    logger.info(
+                        f"Skipping decimation=1x (estimated {estimated_full//1024}KB > "
+                        f"{max_size//1024}KB limit) — starting at decimation={decimation}x"
+                    )
+                return decimation
+        return 4
+    except Exception as e:
+        logger.debug(f"Size estimation failed ({e}), starting at decimation=1x")
+        return 1
+
+
 def _encode_animated_webp_under_limit(
     pil_frames: list,
     frame_duration_ms: int,
@@ -462,7 +511,11 @@ def _encode_animated_webp_under_limit(
                 return buf, q, sz, method
         return None, None, 0, None
 
-    decimation_levels = [1, 2, 3, 4]
+    # Pick a smart starting decimation level based on a fast size estimate,
+    # avoiding wasted encode attempts that are statistically certain to fail.
+    start_decimation = _estimate_starting_decimation(pil_frames, max_size)
+
+    decimation_levels = [d for d in [1, 2, 3, 4] if d >= start_decimation]
     for decimation in decimation_levels:
         if decimation == 1:
             cur_frames = pil_frames
@@ -478,8 +531,15 @@ def _encode_animated_webp_under_limit(
                 f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
             )
 
+        # When start_decimation > 1 we already know this is a large/complex
+        # sticker — skip high-quality attempts that will certainly overshoot
+        # and begin the search at a lower quality level instead.
+        first_pass_qualities = (
+            [72, 58, 46, 34, 24] if start_decimation == 1
+            else [46, 34, 24]
+        )
         best_buf, best_q, best_size, used_method = _quality_search(
-            cur_frames, cur_dur, qualities=[72, 58, 46, 34, 24], method=0,
+            cur_frames, cur_dur, qualities=first_pass_qualities, method=0,
         )
         if best_buf is None and decimation >= 2:
             best_buf, best_q, best_size, used_method = _quality_search(
@@ -630,6 +690,20 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         target_fps = max(target_fps, 8.0)
         frame_duration_ms = max(8, int(1000.0 / target_fps))
         max_frames = min(240, int(10000 / frame_duration_ms))
+
+        # Quick frame-count estimate: if duration * fps > 50 frames, we almost
+        # certainly need decimation=2x later. Extract at half rate now via ffmpeg
+        # instead of extracting all frames and throwing half away in Python —
+        # saves both extraction time and peak memory.
+        estimated_frames = int(duration * target_fps) if duration > 0 else max_frames
+        if estimated_frames > 50:
+            target_fps = target_fps / 2
+            frame_duration_ms = max(8, int(1000.0 / target_fps))
+            max_frames = min(120, int(10000 / frame_duration_ms))
+            logger.info(
+                f"Large sticker (~{estimated_frames} frames at full rate) — "
+                f"extracting at {target_fps:.1f}fps to avoid wasted full-frame encode pass"
+            )
 
         # Pass ffmpeg_threads from config so users can tune CPU load
         ffmpeg_threads = _cfg("ffmpeg_threads")
@@ -979,7 +1053,7 @@ async def create_simple_zip(
             raise ValueError("No valid stickers found after verification.")
 
         for idx, data, ext in sorted(raw_results, key=lambda x: x[0]):
-            sticker_filename = f"sticker{idx:03d}.{ext}"
+            sticker_filename = f"sticker_{idx:03d}.{ext}"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(data)
@@ -1111,7 +1185,6 @@ async def create_wastickers_zip(
             if progress_callback:
                 await progress_callback(completed, total)
 
-        seq = 1
         for result in sorted(results, key=lambda r: r['index']):
             if result['warnings']:
                 stats['warnings'] += len(result['warnings'])
@@ -1128,8 +1201,7 @@ async def create_wastickers_zip(
                 logger.warning(f"❌ Skipping sticker {result['index']}/{total}: {result['reason']}")
                 continue
 
-            sticker_filename = f"sticker{seq:03d}.webp"
-            seq += 1
+            sticker_filename = f"{set_name}_{result['file_id'][-12:]}.webp"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(result['bytes'])
@@ -1197,8 +1269,8 @@ def _build_wasticker_zip_from_valid_entries(
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
 
         emoji_map = {}
-        for seq, entry in enumerate(filtered_entries, 1):
-            sticker_filename = f"sticker{seq:03d}.webp"
+        for entry in filtered_entries:
+            sticker_filename = f"{set_name}_{entry['file_id'][-12:]}.webp"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(entry['bytes'])
@@ -1994,7 +2066,7 @@ async def process_local_folder(client: Client, message: Message):
                     except Exception:
                         pass
                     if data is not None:
-                        output_name = f"sticker{processed_count + 1:03d}.webp"
+                        output_name = f"{sf.stem}_whatsapp.webp"
                         with open(processing_dir / output_name, 'wb') as fh:
                             fh.write(data)
                         processed_count += 1
@@ -2024,8 +2096,8 @@ async def process_local_folder(client: Client, message: Message):
                     author_name = message.from_user.first_name or "Telegram User"
                     zipf.writestr('author.txt', author_name.encode('utf-8'))
                     zipf.writestr('title.txt', part_title.encode('utf-8'))
-                    for webp_file in sorted(processing_dir.glob("*.webp")):
-                        zipf.write(webp_file, webp_file.name)
+                    for webp_file in processing_dir.glob("*.webp"):
+                        zipf.write(webp_file, f"sticker_{webp_file.stem[-8:]}.webp")
 
                 zip_paths.append(zip_name)
                 total_processed += processed_count
@@ -2139,7 +2211,7 @@ async def process_zip_upload(client: Client, message: Message):
                         except Exception:
                             pass
                         if data is not None:
-                            output_name = f"sticker{processed_count + 1:03d}.webp"
+                            output_name = f"{sf.stem}_whatsapp.webp"
                             with open(processing_dir / output_name, 'wb') as fh:
                                 fh.write(data)
                             processed_count += 1
@@ -2166,8 +2238,8 @@ async def process_zip_upload(client: Client, message: Message):
                             zipf.write(tray_path, 'tray.png')
                         zipf.writestr('author.txt', author_name.encode('utf-8'))
                         zipf.writestr('title.txt', part_title.encode('utf-8'))
-                        for webp_file in sorted(processing_dir.glob("*.webp")):
-                            zipf.write(webp_file, webp_file.name)
+                        for webp_file in processing_dir.glob("*.webp"):
+                            zipf.write(webp_file, f"sticker_{webp_file.stem[-8:]}.webp")
 
                     await msg.edit_text(f"📤 Uploading {type_name} sticker pack...")
                     part_suffix = f" (Part {part_num}/{num_parts})" if num_parts > 1 else ""
