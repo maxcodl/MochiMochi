@@ -470,11 +470,14 @@ def convert_to_whatsapp_one_frame_animation(img: Image.Image) -> BytesIO:
 
 def _estimate_starting_decimation(pil_frames: list, max_size: int) -> int:
     """
-    Estimate the minimum decimation level needed before trying any expensive
-    encode attempts. Samples a small number of frames, encodes them at a
-    mid-range quality, extrapolates the full size, and picks the lowest
-    decimation level likely to fit under max_size. This avoids wasting 10-15s
-    on doomed full-frame encode attempts for large/complex stickers.
+    Estimate whether full frame rate (decimation=1x) can possibly fit before
+    committing to it, and only recommend dropping frames if it genuinely
+    cannot — even at the encoder's floor quality. Dropping frames is far more
+    noticeable to a viewer than dropping quality ("choppy" vs "a bit soft"),
+    so this samples at the LOWEST quality the encoder will ever try (12)
+    rather than a mid-range quality — that way full frame rate only gets
+    skipped when there's truly no path to fitting under the size limit
+    without losing frames, not just because a higher-quality guess looked big.
     """
     n = len(pil_frames)
     if n < 2:
@@ -492,24 +495,27 @@ def _estimate_starting_decimation(pil_frames: list, max_size: int) -> int:
         sample_frames[0].save(
             buf, format="WEBP", save_all=True,
             append_images=sample_frames[1:],
-            duration=50, loop=0, quality=60, method=0,
+            duration=50, loop=0, quality=12, method=6, alpha_quality=70,
             background=(0, 0, 0, 0),
         )
         sample_size = buf.tell()
-        # Extrapolate: full encode at same quality ≈ sample_size * (n / len(sample_frames))
-        # Add 15% margin since quality search starts higher than 60
-        estimated_full = int(sample_size * (n / len(sample_frames)) * 1.15)
-        logger.debug(f"Size estimate: sample={sample_size//1024}KB over {len(sample_frames)} frames → "
+        # Extrapolate at floor quality — small margin since we're already at
+        # the bottom of the quality range and can't shrink much further.
+        estimated_full = int(sample_size * (n / len(sample_frames)) * 1.05)
+        logger.debug(f"Floor-quality size estimate: sample={sample_size//1024}KB over {len(sample_frames)} frames → "
                      f"estimated full={estimated_full//1024}KB over {n} frames")
 
-        for decimation in [1, 2, 3, 4]:
+        if estimated_full <= max_size:
+            return 1
+
+        for decimation in [2, 3, 4]:
             estimated = estimated_full // decimation
             if estimated <= max_size:
-                if decimation > 1:
-                    logger.info(
-                        f"Skipping decimation=1x (estimated {estimated_full//1024}KB > "
-                        f"{max_size//1024}KB limit) — starting at decimation={decimation}x"
-                    )
+                logger.info(
+                    f"Even at floor quality, full frame rate estimated at "
+                    f"{estimated_full//1024}KB > {max_size//1024}KB limit — "
+                    f"starting at decimation={decimation}x"
+                )
                 return decimation
         return 4
     except Exception as e:
@@ -578,11 +584,15 @@ def _encode_animated_webp_under_limit(
         best_buf, best_q, best_size, used_method = _quality_search(
             cur_frames, cur_dur, qualities=first_pass_qualities, method=0,
         )
-        if best_buf is None and decimation >= 2:
+        # Keep pushing quality down at THIS SAME frame count before ever
+        # moving on to a more aggressive decimation level — losing frames is
+        # far more noticeable ("choppy") than losing quality, so quality is
+        # always exhausted down to the floor first.
+        if best_buf is None:
             best_buf, best_q, best_size, used_method = _quality_search(
                 cur_frames, cur_dur, qualities=[50, 38, 28, 20], method=4,
             )
-        if best_buf is None and decimation >= 2:
+        if best_buf is None:
             best_buf, best_q, best_size, used_method = _quality_search(
                 cur_frames, cur_dur, qualities=[26, 20, 16, 12], method=6, alpha_q=70,
             )
@@ -728,19 +738,14 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         frame_duration_ms = max(8, int(1000.0 / target_fps))
         max_frames = min(240, int(10000 / frame_duration_ms))
 
-        # Quick frame-count estimate: if duration * fps > 50 frames, we almost
-        # certainly need decimation=2x later. Extract at half rate now via ffmpeg
-        # instead of extracting all frames and throwing half away in Python —
-        # saves both extraction time and peak memory.
+        # NOTE: we deliberately do NOT pre-halve fps at extraction time based
+        # on a frame-count guess. The encoder (_encode_animated_webp_under_limit)
+        # now exhausts its full quality ladder at full frame rate before ever
+        # dropping frames, so pre-halving here would just bake in choppiness
+        # for stickers that would otherwise have fit fine at full smoothness —
+        # it's no longer a safe assumption that decimation will be needed.
         estimated_frames = int(duration * target_fps) if duration > 0 else max_frames
-        if estimated_frames > 50:
-            target_fps = target_fps / 2
-            frame_duration_ms = max(8, int(1000.0 / target_fps))
-            max_frames = min(120, int(10000 / frame_duration_ms))
-            logger.info(
-                f"Large sticker (~{estimated_frames} frames at full rate) — "
-                f"extracting at {target_fps:.1f}fps to avoid wasted full-frame encode pass"
-            )
+        logger.debug(f"Estimated ~{estimated_frames} frames at {target_fps:.1f}fps")
 
         # Pass ffmpeg_threads from config so users can tune CPU load
         ffmpeg_threads = _cfg("ffmpeg_threads")
