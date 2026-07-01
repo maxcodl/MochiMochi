@@ -142,9 +142,19 @@ async def _get_http_session() -> aiohttp.ClientSession:
     return _HTTP_SESSION
 
 async def _run_cpu_bound(func, *args):
-    """Run CPU-heavy sync work in a worker thread to avoid blocking the event loop."""
+    """Run CPU-heavy sync work in a worker thread to avoid blocking the event loop.
+
+    Uses _get_cpu_pool() (sized from config["max_concurrent"]) instead of the
+    default executor (loop.run_in_executor(None, ...)). The default executor
+    is a hidden, fixed-size ThreadPoolExecutor (min(32, os.cpu_count()+4))
+    that's created once and never re-reads CONFIG — so bumping max_concurrent
+    in /settings previously had *no effect* on the actual WebP-encode /
+    ffmpeg.probe work done here, only on the asyncio.Semaphore gating how many
+    stickers get dispatched in the first place. Encodes just piled up on the
+    same unconfigurable pool regardless of the settings.
+    """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: func(*args))
+    return await loop.run_in_executor(_get_cpu_pool(), lambda: func(*args))
 
 def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
     img = Image.open(BytesIO(sticker_data))
@@ -198,6 +208,36 @@ def _rebuild_process_pool(workers: int):
     _PROCESS_POOL = concurrent.futures.ProcessPoolExecutor(max_workers=workers)
     logger.info(f"ProcessPoolExecutor rebuilt with max_workers={workers}")
 
+# ── ThreadPoolExecutor for general CPU-bound work (lazy, size driven by config) ──
+# Used by _run_cpu_bound() for WebP encoding and ffmpeg.probe() — the actual
+# per-sticker heavy lifting for video/webm-based animated stickers (most
+# Telegram animated packs), which never touches _PROCESS_POOL at all since
+# that one's reserved for TGS/Lottie rendering only.
+#
+# A thread pool (not a process pool) is used deliberately here: Pillow's
+# libwebp encoder is a C extension that releases the GIL during save(), so
+# threads DO get real parallelism for the encode step without the cost of
+# pickling full lists of 512x512 RGBA PIL.Image frames across a process
+# boundary on every call (which a ProcessPoolExecutor would require).
+_CPU_POOL: concurrent.futures.ThreadPoolExecutor | None = None
+
+def _get_cpu_pool() -> concurrent.futures.ThreadPoolExecutor:
+    global _CPU_POOL
+    workers = _cfg("max_concurrent")
+    if _CPU_POOL is None:
+        _CPU_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        logger.info(f"CPU ThreadPoolExecutor created with max_workers={workers}")
+    return _CPU_POOL
+
+def _rebuild_cpu_pool(workers: int):
+    """Shut down the existing CPU pool and create a new one with updated worker count."""
+    global _CPU_POOL
+    if _CPU_POOL is not None:
+        _CPU_POOL.shutdown(wait=False)
+        _CPU_POOL = None
+    _CPU_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    logger.info(f"CPU ThreadPoolExecutor rebuilt with max_workers={workers}")
+
 # ── Authorised chats ──────────────────────────────────────────────────────────
 def save_authorized_chats():
     try:
@@ -215,6 +255,12 @@ def sanitize_filename(name: str) -> str:
     name = re.sub(r'[<>:"/\\|?*]', '', name)
     name = re.sub(r'[\s-]+', '_', name).strip("_")
     return name[:50] if name else "sticker_pack"
+
+def _format_elapsed(seconds: float) -> str:
+    """Human-readable elapsed time for pack captions, e.g. '8m 12s' or '43s'."""
+    total = int(round(seconds))
+    m, s = divmod(total, 60)
+    return f"{m}m {s}s" if m else f"{s}s"
 
 # ── WebP helpers ──────────────────────────────────────────────────────────────
 def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[bool, str]:
@@ -1534,6 +1580,7 @@ async def settings_callback(client: Client, callback_query):
         CONFIG.update(CONFIG_DEFAULTS)
         _save_config(CONFIG)
         _rebuild_process_pool(_cfg("process_pool_workers"))
+        _rebuild_cpu_pool(_cfg("max_concurrent"))
         await callback_query.answer("Reset to defaults.")
         try:
             await callback_query.message.edit_text(_settings_text(), reply_markup=_settings_keyboard())
@@ -1563,6 +1610,8 @@ async def settings_callback(client: Client, callback_query):
 
     if key == "process_pool_workers":
         _rebuild_process_pool(new_val)
+    if key == "max_concurrent":
+        _rebuild_cpu_pool(new_val)
 
     await callback_query.answer(f"{meta['label']} → {new_val}{meta['unit']}")
     try:
@@ -1742,6 +1791,7 @@ async def process_stickers(
     from_user_id: int
 ):
     try:
+        _pack_start_time = time.monotonic()
         set_name_sanitized = sanitize_filename(set_title)
         if not stickers:
             await msg.edit_text("No stickers provided.")
@@ -1775,11 +1825,12 @@ async def process_stickers(
             )
             await msg.edit_text("Uploading ZIP file...")
             mode_desc = "Raw stickers" if skip_conversion else "Converted stickers"
+            elapsed = _format_elapsed(time.monotonic() - _pack_start_time)
             await client.send_document(
                 chat_id=target_chat,
                 document=str(zip_path),
                 file_name=zip_path.name,
-                caption=f"{mode_desc}: {valid_count} files\n{set_title}",
+                caption=f"{mode_desc}: {valid_count} files\n{set_title}\nConverted in {elapsed}",
                 disable_notification=True
             )
             try:
@@ -1849,6 +1900,9 @@ async def process_stickers(
         if valid_count_total > 30:
             caption += f"\n\n{valid_count_total} stickers"
 
+        elapsed = _format_elapsed(time.monotonic() - _pack_start_time)
+        caption += f"\nConverted in {elapsed}"
+
         try:
             await msg.edit_text(f"Uploading {type_name} pack ({valid_count_total} stickers)...")
         except Exception:
@@ -1874,7 +1928,18 @@ async def process_stickers(
             logger.warning(f"Cleanup error: {ce}")
 
         try:
-            await msg.reply_text(f"✅ Successfully sent {valid_count_total} stickers!")
+            sent_success_msg = await msg.reply_text(f"Successfully sent {valid_count_total} stickers!")
+
+            async def _delete_after_delay(target_msg, delay_secs: float = 10.0):
+                try:
+                    await asyncio.sleep(delay_secs)
+                    await target_msg.delete()
+                except Exception as de:
+                    logger.debug(f"Could not auto-delete success message: {de}")
+
+            # Fire-and-forget: don't block the handler (or the semaphore slot
+            # it's running under) for 10s just to clean up a status message.
+            asyncio.create_task(_delete_after_delay(sent_success_msg))
         except Exception:
             pass
 
@@ -1926,7 +1991,7 @@ async def convert_pack(client: Client, message: Message):
         mode_text = " (Raw ZIP)" if (use_simple_zip and skip_conversion) else " (Converted ZIP)" if use_simple_zip else ""
         name_text = f" as **{custom_name}**" if custom_name else ""
         msg = await message.reply_text(
-            f"⏳ Send stickers one by one to create a pack{name_text}{mode_text}.\n\nStickers added: 0",
+            f"Send stickers one by one to create a pack{name_text}{mode_text}.\n\nStickers added: 0",
             reply_markup=keyboard
         )
         active_sticker_sessions[session_key] = {
@@ -2372,7 +2437,7 @@ async def process_zip_upload(client: Client, message: Message):
     except Exception as e:
         logger.error(f"ZIP processing failed: {e}")
         try:
-            await msg.edit_text(f"❌ Processing failed: {str(e)}")
+            await msg.edit_text(f"Processing failed: {str(e)}")
         except Exception:
             pass
 
@@ -2381,10 +2446,13 @@ if __name__ == "__main__":
     import atexit
 
     def _shutdown():
-        global _HTTP_SESSION, _PROCESS_POOL
+        global _HTTP_SESSION, _PROCESS_POOL, _CPU_POOL
         if _PROCESS_POOL is not None:
             _PROCESS_POOL.shutdown(wait=False)
             _PROCESS_POOL = None
+        if _CPU_POOL is not None:
+            _CPU_POOL.shutdown(wait=False)
+            _CPU_POOL = None
         if _HTTP_SESSION is not None and not _HTTP_SESSION.closed:
             import asyncio as _asyncio
             try:
