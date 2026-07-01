@@ -104,8 +104,8 @@ def _cfg(key: str):
     return CONFIG.get(key, CONFIG_DEFAULTS[key])
 
 # ── WhatsApp sticker hard limits ─────────────────────────────────────────────
-WA_MAX_BYTES   = 488 * 1024
-WA_ANIM_TARGET = 460 * 1024
+WA_MAX_BYTES   = 499 * 1024
+WA_ANIM_TARGET = 499 * 1024
 
 # ── Shared HTTP session ───────────────────────────────────────────────────────
 _HTTP_SESSION: aiohttp.ClientSession | None = None
