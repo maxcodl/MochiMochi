@@ -553,15 +553,27 @@ public class WastickerParser {
                                          DocumentFile packDirDoc) throws IOException {
         String rootPath = getStickerFolderPath(context);
         if (isCustomPathUri(context)) {
-            DocumentFile packDir = packDirDoc;
-            if (packDir == null) {
-                DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
-                packDir = root != null ? root.findFile(packId) : null;
+            DocumentFile destFile;
+            StickerContentProvider provider = StickerContentProvider.getInstance();
+            if (provider != null) {
+                // Cache-coherent path: avoids the findFile()/findFile()/createFile()
+                // chain (2-3 SAF IPC round-trips per sticker, each one listing every
+                // file already in the pack folder) that this same fix already solved
+                // for thumbnail generation. This was the missing half of that fix —
+                // it made bulk *sticker* import slow on SD-card-backed folders,
+                // scaling worse the more stickers were already in the pack.
+                destFile = provider.getOrCreateSafFileCached(context, packId, fileName, "image/*");
+            } else {
+                // Fallback: provider not yet created, use direct (uncached) lookups.
+                DocumentFile packDir = packDirDoc;
+                if (packDir == null) {
+                    DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+                    packDir = root != null ? root.findFile(packId) : null;
+                }
+                if (packDir == null) throw new IOException("Pack directory not found: " + packId);
+                destFile = packDir.findFile(fileName);
+                if (destFile == null) destFile = packDir.createFile("image/*", fileName);
             }
-            if (packDir == null) throw new IOException("Pack directory not found: " + packId);
-
-            DocumentFile destFile = packDir.findFile(fileName);
-            if (destFile == null) destFile = packDir.createFile("image/*", fileName);
             if (destFile == null) throw new IOException("Could not create file: " + fileName);
 
             try (InputStream is = new FileInputStream(src);
