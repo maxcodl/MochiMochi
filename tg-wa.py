@@ -112,6 +112,16 @@ def _cfg(key: str):
 WA_MAX_BYTES   = 499_000
 WA_ANIM_TARGET = 494_000
 
+# WhatsApp's official cap: "Animation duration should be less than or equal
+# to 10 seconds total" (WhatsApp/stickers repo, Android/iOS README). This is
+# a PACK-LEVEL check on WhatsApp's own side — if even one sticker in a pack
+# (or in one auto-split ~30-sticker chunk) exceeds this, WhatsApp rejects the
+# whole chunk with a generic "problem with the sticker pack" /
+# "handleStickerPackPreviewResult/failed" error, not a per-sticker message.
+# Kept at 9800ms (200ms safety margin below the hard 10000ms limit) since our
+# own frame-count math can round up to just over 10000ms otherwise.
+WA_MAX_ANIM_DURATION_MS = 9_800
+
 # ── Sticker thumbnail settings ────────────────────────────────────────────────
 # Generated once here, at pack-creation time, instead of on-device during
 # import. MUST match StickerProcessor.THUMB_SIZE on the Android side, or
@@ -608,6 +618,24 @@ def _encode_animated_webp_under_limit(
                 f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
             )
 
+        # FIX: WhatsApp hard-rejects a whole pack chunk if ANY sticker's total
+        # animation duration exceeds ~10s (see WA_MAX_ANIM_DURATION_MS above).
+        # This is independent of frame count/quality/size — a sticker can pass
+        # every other check and still trigger a pack-level "problem with the
+        # sticker pack" error on WhatsApp's side purely from running too long
+        # in real time. Truncate trailing frames (not resample) so we keep
+        # full smoothness on the frames we do show, and just cut the tail —
+        # cheaper than dropping frames throughout and still under 2 frames
+        # only in pathological single-frame-duration-over-cap cases.
+        max_frames_for_duration = max(2, WA_MAX_ANIM_DURATION_MS // cur_dur)
+        if len(cur_frames) > max_frames_for_duration:
+            logger.info(
+                f"Trimming {len(cur_frames)} → {max_frames_for_duration} frames to stay "
+                f"under WhatsApp's {WA_MAX_ANIM_DURATION_MS}ms animation duration cap "
+                f"({cur_dur}ms/frame would otherwise total {len(cur_frames) * cur_dur}ms)"
+            )
+            cur_frames = cur_frames[:max_frames_for_duration]
+
         # Jump straight to roughly the right quality instead of scanning the
         # ladder from the top — only a handful of step-downs from there.
         predicted_q = _predict_quality(cur_frames, cur_dur)
@@ -672,7 +700,7 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
     except Exception:
         fps, in_point, out_point = 30.0, 0, 90
 
-    render_frames     = min(max(1, out_point - in_point), int(10.0 * fps), 120)
+    render_frames     = min(max(1, out_point - in_point), int(WA_MAX_ANIM_DURATION_MS / 1000.0 * fps), 120)
     frame_duration_ms = max(8, int(1000.0 / fps))
 
     pil_frames = None
@@ -764,7 +792,7 @@ async def convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         target_fps = min(input_fps, 20.0)
         target_fps = max(target_fps, 8.0)
         frame_duration_ms = max(8, int(1000.0 / target_fps))
-        max_frames = min(240, int(10000 / frame_duration_ms))
+        max_frames = min(240, int(WA_MAX_ANIM_DURATION_MS / frame_duration_ms))
 
         # NOTE: we deliberately do NOT pre-halve fps at extraction time based
         # on a frame-count guess. The encoder (_encode_animated_webp_under_limit)
