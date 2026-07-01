@@ -979,7 +979,7 @@ async def create_simple_zip(
             raise ValueError("No valid stickers found after verification.")
 
         for idx, data, ext in sorted(raw_results, key=lambda x: x[0]):
-            sticker_filename = f"sticker_{idx:03d}.{ext}"
+            sticker_filename = f"sticker{idx:03d}.{ext}"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(data)
@@ -1111,6 +1111,7 @@ async def create_wastickers_zip(
             if progress_callback:
                 await progress_callback(completed, total)
 
+        seq = 1
         for result in sorted(results, key=lambda r: r['index']):
             if result['warnings']:
                 stats['warnings'] += len(result['warnings'])
@@ -1127,7 +1128,8 @@ async def create_wastickers_zip(
                 logger.warning(f"❌ Skipping sticker {result['index']}/{total}: {result['reason']}")
                 continue
 
-            sticker_filename = f"{set_name}_{result['file_id'][-12:]}.webp"
+            sticker_filename = f"sticker{seq:03d}.webp"
+            seq += 1
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(result['bytes'])
@@ -1195,8 +1197,8 @@ def _build_wasticker_zip_from_valid_entries(
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
 
         emoji_map = {}
-        for entry in filtered_entries:
-            sticker_filename = f"{set_name}_{entry['file_id'][-12:]}.webp"
+        for seq, entry in enumerate(filtered_entries, 1):
+            sticker_filename = f"sticker{seq:03d}.webp"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(entry['bytes'])
@@ -1992,7 +1994,7 @@ async def process_local_folder(client: Client, message: Message):
                     except Exception:
                         pass
                     if data is not None:
-                        output_name = f"{sf.stem}_whatsapp.webp"
+                        output_name = f"sticker{processed_count + 1:03d}.webp"
                         with open(processing_dir / output_name, 'wb') as fh:
                             fh.write(data)
                         processed_count += 1
@@ -2022,8 +2024,8 @@ async def process_local_folder(client: Client, message: Message):
                     author_name = message.from_user.first_name or "Telegram User"
                     zipf.writestr('author.txt', author_name.encode('utf-8'))
                     zipf.writestr('title.txt', part_title.encode('utf-8'))
-                    for webp_file in processing_dir.glob("*.webp"):
-                        zipf.write(webp_file, f"sticker_{webp_file.stem[-8:]}.webp")
+                    for webp_file in sorted(processing_dir.glob("*.webp")):
+                        zipf.write(webp_file, webp_file.name)
 
                 zip_paths.append(zip_name)
                 total_processed += processed_count
@@ -2137,7 +2139,7 @@ async def process_zip_upload(client: Client, message: Message):
                         except Exception:
                             pass
                         if data is not None:
-                            output_name = f"{sf.stem}_whatsapp.webp"
+                            output_name = f"sticker{processed_count + 1:03d}.webp"
                             with open(processing_dir / output_name, 'wb') as fh:
                                 fh.write(data)
                             processed_count += 1
@@ -2164,8 +2166,8 @@ async def process_zip_upload(client: Client, message: Message):
                             zipf.write(tray_path, 'tray.png')
                         zipf.writestr('author.txt', author_name.encode('utf-8'))
                         zipf.writestr('title.txt', part_title.encode('utf-8'))
-                        for webp_file in processing_dir.glob("*.webp"):
-                            zipf.write(webp_file, f"sticker_{webp_file.stem[-8:]}.webp")
+                        for webp_file in sorted(processing_dir.glob("*.webp")):
+                            zipf.write(webp_file, webp_file.name)
 
                     await msg.edit_text(f"📤 Uploading {type_name} sticker pack...")
                     part_suffix = f" (Part {part_num}/{num_parts})" if num_parts > 1 else ""
