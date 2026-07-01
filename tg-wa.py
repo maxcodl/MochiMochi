@@ -107,6 +107,15 @@ def _cfg(key: str):
 WA_MAX_BYTES   = 499 * 1024
 WA_ANIM_TARGET = 495 * 1024
 
+# ── Sticker thumbnail settings ────────────────────────────────────────────────
+# Generated once here, at pack-creation time, instead of on-device during
+# import. MUST match StickerProcessor.THUMB_SIZE on the Android side, or
+# packs built by this bot will show a different thumbnail resolution than
+# packs whose thumbnails were generated on-device (e.g. via the "regenerate
+# thumbnails" migration path, or packs merged from older imports).
+STICKER_THUMB_SIZE = 100
+STICKER_THUMB_QUALITY = 80
+
 # ── Shared HTTP session ───────────────────────────────────────────────────────
 _HTTP_SESSION: aiohttp.ClientSession | None = None
 
@@ -125,6 +134,34 @@ async def _run_cpu_bound(func, *args):
 def _convert_static_bytes_to_webp(sticker_data: bytes) -> BytesIO:
     img = Image.open(BytesIO(sticker_data))
     return convert_to_whatsapp_static(img)
+
+def generate_thumbnail_from_webp_bytes(webp_bytes: bytes, thumb_size: int = STICKER_THUMB_SIZE) -> bytes:
+    """
+    Builds a small static WebP thumbnail from an already-converted sticker's
+    final WebP bytes. Works for both static and animated input — for animated
+    WebP, only frame 0 is used (PIL defaults to frame 0 on open/seek(0)),
+    matching how a sticker list preview is meant to look.
+
+    This runs on bytes we already have in memory post-conversion, so it's a
+    cheap extra resize rather than a fresh decode from disk. Generating it
+    here means the Android app can just copy this file into the pack folder
+    on import instead of decoding + resizing + re-encoding every sticker
+    on-device (the slow part on SAF/SD-card-backed folders).
+    """
+    img = Image.open(BytesIO(webp_bytes))
+    try:
+        img.seek(0)
+    except Exception:
+        pass
+    img = img.convert("RGBA")
+    frame = img.copy()
+    frame.thumbnail((thumb_size, thumb_size), Image.LANCZOS)
+    canvas = Image.new("RGBA", (thumb_size, thumb_size), (0, 0, 0, 0))
+    position = ((thumb_size - frame.width) // 2, (thumb_size - frame.height) // 2)
+    canvas.paste(frame, position, frame)
+    out = BytesIO()
+    canvas.save(out, format="WEBP", quality=STICKER_THUMB_QUALITY, method=4)
+    return out.getvalue()
 
 # ── ProcessPoolExecutor (lazy, size driven by config) ────────────────────────
 _PROCESS_POOL: concurrent.futures.ProcessPoolExecutor | None = None
@@ -1206,6 +1243,15 @@ async def create_wastickers_zip(
             with open(sticker_path, 'wb') as f:
                 f.write(result['bytes'])
 
+            # Pre-generate the thumbnail alongside the sticker itself, so packs
+            # built via this (non-return_valid_results) path also carry one.
+            try:
+                thumb_bytes = generate_thumbnail_from_webp_bytes(result['bytes'])
+                with open(work_dir / f"thumb_{sticker_filename}", 'wb') as f:
+                    f.write(thumb_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to generate thumbnail for {sticker_filename}: {e}")
+
             emoji_map[sticker_filename] = result['emoji_list']
             valid_entries.append({
                 'file_id': result['file_id'],
@@ -1276,6 +1322,19 @@ def _build_wasticker_zip_from_valid_entries(
                 f.write(entry['bytes'])
             emoji_map[sticker_filename] = entry['emoji_list']
 
+            # Pre-generate the thumbnail here, at pack-build time on the bot,
+            # instead of leaving it for the Android app to decode/resize/
+            # re-encode on-device during import. The app just needs to see
+            # "thumb_<filename>" already sitting next to the sticker and copy
+            # it in — see WastickerParser.importStickerPack() on the app side.
+            try:
+                thumb_bytes = generate_thumbnail_from_webp_bytes(entry['bytes'])
+                thumb_path = work_dir / f"thumb_{sticker_filename}"
+                with open(thumb_path, 'wb') as f:
+                    f.write(thumb_bytes)
+            except Exception as e:
+                logger.warning(f"Failed to generate thumbnail for {sticker_filename}: {e}")
+
         emojis_json_path = work_dir / "emojis.json"
         with open(emojis_json_path, 'w', encoding='utf-8') as f:
             json.dump(emoji_map, f, ensure_ascii=False, indent=2)
@@ -1341,17 +1400,6 @@ async def list_authorized_chats(client: Client, message: Message):
         await message.reply_text(f"Authorized chats:\n`{chats_list}`")
 
 # ── /settings command ─────────────────────────────────────────────────────────
-# Owner-only. Lets you tune how many resources the bot uses during conversion.
-#
-# Settings:
-#   max_concurrent      — how many stickers are downloaded/converted in parallel
-#   process_pool_workers — how many CPU worker processes render TGS animations
-#   ffmpeg_threads      — how many threads ffmpeg uses to decode video stickers
-#   tgs_render_timeout  — seconds before a TGS render is aborted
-#
-# Each setting has a floor and ceiling to prevent the bot from thrashing or
-# deadlocking. Raising values speeds up conversion but uses more CPU/RAM.
-
 _SETTINGS_META = {
     "max_concurrent": {
         "label": "Parallel",
@@ -1452,7 +1500,6 @@ async def settings_callback(client: Client, callback_query):
     CONFIG[key] = new_val
     _save_config(CONFIG)
 
-    # If process pool workers changed, rebuild the pool immediately
     if key == "process_pool_workers":
         _rebuild_process_pool(new_val)
 
@@ -1543,12 +1590,15 @@ async def loadsticker_command(client: Client, message: Message):
         tray_bytes = await _run_cpu_bound(optimize_tray_icon, converted_bytes, False)
         await msg.edit_text("📦 Packaging .wasticker file...")
 
+        thumb_bytes = await _run_cpu_bound(generate_thumbnail_from_webp_bytes, converted_bytes)
+
         wasticker_bio = BytesIO()
         with zipfile.ZipFile(wasticker_bio, 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.writestr('title.txt', pack_title)
             zipf.writestr('author.txt', author_name)
             zipf.writestr('tray.png', tray_bytes.getvalue())
             zipf.writestr('sticker_001.webp', converted_bytes)
+            zipf.writestr('thumb_sticker_001.webp', thumb_bytes)
         wasticker_bio.seek(0)
 
         wasticker_name = f"{sanitize_filename(pack_title)}.idwasticker"
@@ -1717,7 +1767,8 @@ async def process_stickers(
             return
 
         internal_name = f"{set_name_sanitized}_{type_letter}"
-        zip_path = _build_wasticker_zip_from_valid_entries(
+        zip_path = await _run_cpu_bound(
+            _build_wasticker_zip_from_valid_entries,
             internal_name, optimized_tray_bytes, valid_entries, set_title, author_name, has_animated,
         )
 
@@ -1881,7 +1932,6 @@ async def handle_individual_stickers(client: Client, message: Message):
     session_key = (message.chat.id, message.from_user.id)
     if session_key not in active_sticker_sessions:
         return
-    # Inline TTL check (background task handles bulk pruning)
     if time.monotonic() - active_sticker_sessions[session_key].get("created_at", 0) > _SESSION_TTL:
         active_sticker_sessions.pop(session_key, None)
         return
@@ -2136,10 +2186,6 @@ async def process_zip_upload(client: Client, message: Message):
             extract_dir = tmp_path / "extracted"
             extract_dir.mkdir()
 
-            # FIX: extract member-by-member (not extractall) to properly enforce Zip Slip guard.
-            # The original code validated all members then called extractall() — a TOCTOU gap
-            # where a symlink bomb could bypass the check. We now extract each entry individually
-            # immediately after validating it.
             extract_dir_resolved = extract_dir.resolve()
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 for member in zip_ref.infolist():

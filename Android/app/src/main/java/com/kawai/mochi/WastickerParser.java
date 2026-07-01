@@ -483,11 +483,34 @@ public class WastickerParser {
                             File src = new File(tempDir, imageFile);
                             if (src.exists()) {
                                 copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
-                                try {
-                                    generateThumbnailForSticker(context, identifier, imageFile);
-                                } catch (IOException e) {
-                                    Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e);
+
+                                // Prefer a thumbnail the bot already generated and shipped
+                                // inside the .wasticker zip (thumb_<imageFile>) — just copy
+                                // it in. Only fall back to generating one on-device (slow:
+                                // decode + resize + re-encode, plus extra SAF round-trips)
+                                // for packs from an older bot version that didn't include one.
+                                String thumbFileName = "thumb_" + imageFile;
+                                File thumbSrc = new File(tempDir, thumbFileName);
+                                if (thumbSrc.exists()) {
+                                    try {
+                                        copyToPackFolder(context, thumbSrc, identifier, thumbFileName, packDirDoc);
+                                    } catch (IOException e) {
+                                        Log.w(TAG, "Failed to copy pre-generated thumbnail for " + imageFile
+                                                + ", falling back to on-device generation", e);
+                                        try {
+                                            generateThumbnailForSticker(context, identifier, imageFile);
+                                        } catch (IOException e2) {
+                                            Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e2);
+                                        }
+                                    }
+                                } else {
+                                    try {
+                                        generateThumbnailForSticker(context, identifier, imageFile);
+                                    } catch (IOException e) {
+                                        Log.w(TAG, "Failed to generate thumbnail for " + imageFile, e);
+                                    }
                                 }
+
                                 if (!detectedAnimated) {
                                     try {
                                         StickerInfoAdapter.WebPInfo info = StickerInfoAdapter.readWebPInfo(src);
