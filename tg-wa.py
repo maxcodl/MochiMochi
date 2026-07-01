@@ -104,8 +104,13 @@ def _cfg(key: str):
     return CONFIG.get(key, CONFIG_DEFAULTS[key])
 
 # ── WhatsApp sticker hard limits ─────────────────────────────────────────────
-WA_MAX_BYTES   = 499 * 1024
-WA_ANIM_TARGET = 495 * 1024
+# NOTE: WhatsApp's own limit is exactly 500,000 bytes (decimal), not 500KiB
+# (500*1024=512000) or 499*1024=510976 as this used to say. That KiB/KB mix-up
+# let the encoder produce files up to ~11KB over the real cap — they'd pass
+# every check in this script but still get rejected by the app with
+# "exceeds 500,000 bytes". Keep these as plain decimal byte counts.
+WA_MAX_BYTES   = 499_000
+WA_ANIM_TARGET = 494_000
 
 # ── Sticker thumbnail settings ────────────────────────────────────────────────
 # Generated once here, at pack-creation time, instead of on-device during
@@ -554,6 +559,35 @@ def _encode_animated_webp_under_limit(
                 return buf, q, sz, method
         return None, None, 0, None
 
+    def _predict_quality(frames, dur_ms, method=4, alpha_q=80):
+        """
+        Cheaply estimate roughly which quality value will land closest to
+        max_size for THIS frame count, using two small samples (quality 20
+        and 60) to build a rough linear size-vs-quality model, instead of
+        blindly scanning the whole ladder from the top every time. This is
+        what actually cuts encode time — the old code always started probing
+        at quality=72 regardless of how likely that was to succeed.
+        """
+        n = len(frames)
+        sample_count = min(6, n)
+        step = max(1, n // sample_count)
+        samples = frames[::step][:sample_count]
+        if len(samples) < 2:
+            samples = frames[:2]
+        try:
+            hi_buf = _try(samples, dur_ms, 60, method, alpha_q)
+            lo_buf = _try(samples, dur_ms, 20, method, alpha_q)
+            full_hi = hi_buf.tell() * n / len(samples)
+            full_lo = lo_buf.tell() * n / len(samples)
+            slope = (full_hi - full_lo) / 40.0  # bytes per quality point
+            if slope <= 0:
+                return 40
+            target = max_size * 0.92  # small safety margin below the hard cap
+            q = 20 + (target - full_lo) / slope
+            return int(max(12, min(72, q)))
+        except Exception:
+            return 40
+
     # Pick a smart starting decimation level based on a fast size estimate,
     # avoiding wasted encode attempts that are statistically certain to fail.
     start_decimation = _estimate_starting_decimation(pil_frames, max_size)
@@ -574,27 +608,21 @@ def _encode_animated_webp_under_limit(
                 f"({len(cur_frames)} frames, {cur_dur}ms/frame)"
             )
 
-        # When start_decimation > 1 we already know this is a large/complex
-        # sticker — skip high-quality attempts that will certainly overshoot
-        # and begin the search at a lower quality level instead.
-        first_pass_qualities = (
-            [72, 58, 46, 34, 24] if start_decimation == 1
-            else [46, 34, 24]
+        # Jump straight to roughly the right quality instead of scanning the
+        # ladder from the top — only a handful of step-downs from there.
+        predicted_q = _predict_quality(cur_frames, cur_dur)
+        candidates = sorted(
+            {q for q in (predicted_q, predicted_q - 10, predicted_q - 20, predicted_q - 32, 12) if 12 <= q <= 72},
+            reverse=True,
         )
         best_buf, best_q, best_size, used_method = _quality_search(
-            cur_frames, cur_dur, qualities=first_pass_qualities, method=0,
+            cur_frames, cur_dur, qualities=candidates, method=4, alpha_q=80,
         )
-        # Keep pushing quality down at THIS SAME frame count before ever
-        # moving on to a more aggressive decimation level — losing frames is
-        # far more noticeable ("choppy") than losing quality, so quality is
-        # always exhausted down to the floor first.
-        if best_buf is None:
+        # Last-resort single attempt at the true floor with the slowest but
+        # most efficient compression method, only if the fast path missed.
+        if best_buf is None and 12 not in candidates:
             best_buf, best_q, best_size, used_method = _quality_search(
-                cur_frames, cur_dur, qualities=[50, 38, 28, 20], method=4,
-            )
-        if best_buf is None:
-            best_buf, best_q, best_size, used_method = _quality_search(
-                cur_frames, cur_dur, qualities=[26, 20, 16, 12], method=6, alpha_q=70,
+                cur_frames, cur_dur, qualities=[12], method=6, alpha_q=65,
             )
 
         if best_buf is not None:
@@ -1320,8 +1348,8 @@ def _build_wasticker_zip_from_valid_entries(
         (work_dir / "title.txt").write_text(title, encoding='utf-8')
 
         emoji_map = {}
-        for entry in filtered_entries:
-            sticker_filename = f"{set_name}_{entry['file_id'][-12:]}.webp"
+        for idx, entry in enumerate(filtered_entries, start=1):
+            sticker_filename = f"sticker_{idx}.webp"
             sticker_path = work_dir / sticker_filename
             with open(sticker_path, 'wb') as f:
                 f.write(entry['bytes'])
