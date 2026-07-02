@@ -366,6 +366,39 @@ public class StickerContentProvider extends ContentProvider {
         }
     }
 
+    /**
+     * Cache-coherent lookup (and optional creation) of a subdirectory inside a
+     * pack's SAF directory. Used by thumbnail generation to create the
+     * {@code thumbnails/} subfolder without unnecessary round-trips.
+     */
+    @Nullable
+    public DocumentFile getOrCreateSafSubdirCached(@NonNull Context context,
+                                                   @NonNull String packId,
+                                                   @NonNull String subdirName) {
+        String folderPath = WastickerParser.getStickerFolderPath(context);
+        synchronized (safCacheLock) {
+            // Re-use the pack-dir cache
+            Map<String, DocumentFile> packDirs = getSafPackDirs(context, folderPath);
+            DocumentFile packDir = packDirs.get(packId);
+            if (packDir == null) return null;
+
+            // Check the file cache for an entry keyed by the subdir name
+            Map<String, DocumentFile> packFiles = getSafPackFiles(context, folderPath, packId);
+            DocumentFile existing = packFiles.get(subdirName + "/");
+            if (existing != null) return existing;
+
+            // Look up directly
+            DocumentFile subdir = packDir.findFile(subdirName);
+            if (subdir == null || !subdir.isDirectory()) {
+                subdir = packDir.createDirectory(subdirName);
+            }
+            if (subdir != null) {
+                packFiles.put(subdirName + "/", subdir);
+            }
+            return subdir;
+        }
+    }
+
     private List<StickerPack> getStickerPackList() {
         if (stickerPackList == null) readContentFile(Objects.requireNonNull(getContext()));
         return stickerPackList;
@@ -501,9 +534,17 @@ public class StickerContentProvider extends ContentProvider {
         if (stickerPack != null) {
             if (fileName.equals(stickerPack.trayImageFile)) return fetchFile(uri, fileName, identifier);
 
-            // Fast-path: check if it's a thumbnail request and handle it
-            boolean isThumb = fileName.startsWith("thumbs/thumb_");
-            String originalFileName = isThumb ? fileName.substring("thumbs/thumb_".length()) : fileName;
+            // Thumbnail requests come in as "thumbnails/thumb_<original>"
+            boolean isThumb = fileName.startsWith("thumbnails/thumb_");
+            // Also accept legacy "thumbs/thumb_" for backward compat
+            if (!isThumb) isThumb = fileName.startsWith("thumbs/thumb_");
+            String originalFileName;
+            if (isThumb) {
+                int slashIdx = fileName.indexOf('/') + 1;
+                originalFileName = fileName.substring(slashIdx + "thumb_".length());
+            } else {
+                originalFileName = fileName;
+            }
 
             for (Sticker sticker : stickerPack.getStickers()) {
                 if (originalFileName.equals(sticker.imageFileName)) {
@@ -547,19 +588,30 @@ public class StickerContentProvider extends ContentProvider {
             // Thumbnails are read in bulk every time a list/grid is shown. Fresco
             // does not disk-cache local/content URIs, so on an SD-card-backed SAF
             // folder every cold start would otherwise re-fetch every thumbnail via
-            // slow SAF IPC. Mirror them into internal storage (real fast disk) on
-            // first read; after that, serve straight from the mirror.
-            if (fileName.startsWith("thumb_")) {
-                File mirror = new File(getThumbMirrorDir(context, resolvedIdentifier), fileName);
+            // slow SAF IPC. Mirror them into internal storage on first read.
+            if (fileName.startsWith("thumbnails/") || fileName.startsWith("thumb_")) {
+                // Derive a flat mirror file name (strip subfolder prefix)
+                String mirrorName = fileName.contains("/")
+                        ? fileName.substring(fileName.lastIndexOf('/') + 1)
+                        : fileName;
+                File mirror = new File(getThumbMirrorDir(context, resolvedIdentifier), mirrorName);
                 if (mirror.exists()) {
                     try {
                         return new AssetFileDescriptor(ParcelFileDescriptor.open(mirror, ParcelFileDescriptor.MODE_READ_ONLY), 0, mirror.length());
                     } catch (IOException e) {
-                        // Mirror file vanished/corrupt; fall through and re-fetch + re-mirror below.
+                        // Mirror corrupt; fall through and re-fetch below.
                     }
                 }
                 try {
                     DocumentFile file = getSafPackFiles(context, folderPath, resolvedIdentifier).get(fileName);
+                    if (file == null) {
+                        // Try inside thumbnails/ subdir
+                        DocumentFile packDir = getSafPackDirs(context, folderPath).get(resolvedIdentifier);
+                        if (packDir != null) {
+                            DocumentFile thumbDir = packDir.findFile("thumbnails");
+                            if (thumbDir != null) file = thumbDir.findFile(mirrorName);
+                        }
+                    }
                     if (file != null) {
                         File parent = mirror.getParentFile();
                         if (parent != null && !parent.exists()) parent.mkdirs();
@@ -582,6 +634,15 @@ public class StickerContentProvider extends ContentProvider {
             }
             try {
                 DocumentFile file = getSafPackFiles(context, folderPath, resolvedIdentifier).get(fileName);
+                if (file == null && fileName.startsWith("thumbnails/")) {
+                    // Look inside the thumbnails/ subdir
+                    String baseName = fileName.substring("thumbnails/".length());
+                    DocumentFile packDir = getSafPackDirs(context, folderPath).get(resolvedIdentifier);
+                    if (packDir != null) {
+                        DocumentFile thumbDir = packDir.findFile("thumbnails");
+                        if (thumbDir != null) file = thumbDir.findFile(baseName);
+                    }
+                }
                 if (file != null) {
                     return context.getContentResolver().openAssetFileDescriptor(file.getUri(), "r");
                 }
@@ -591,6 +652,11 @@ public class StickerContentProvider extends ContentProvider {
         } else {
             try {
                 File userFile = new File(new File(folderPath, resolvedIdentifier), fileName);
+                if (!userFile.exists() && fileName.startsWith("thumbnails/")) {
+                    // Look inside thumbnails/ subfolder
+                    File packDir = new File(folderPath, resolvedIdentifier);
+                    userFile = new File(new File(packDir, "thumbnails"), fileName.substring("thumbnails/".length()));
+                }
                 if (userFile.exists()) {
                     return new AssetFileDescriptor(ParcelFileDescriptor.open(userFile, ParcelFileDescriptor.MODE_READ_ONLY), 0, userFile.length());
                 }

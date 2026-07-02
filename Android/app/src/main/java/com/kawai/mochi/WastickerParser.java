@@ -206,25 +206,33 @@ public class WastickerParser {
             DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
             DocumentFile packDir = root != null ? root.findFile(packId) : null;
             if (packDir == null) return;
+            // Delete the thumbnails/ subfolder entirely
+            DocumentFile thumbDir = packDir.findFile("thumbnails");
+            if (thumbDir != null && thumbDir.exists()) {
+                thumbDir.delete();
+            }
+            // Also clean up any legacy flat thumb_ files from older versions
             for (DocumentFile file : packDir.listFiles()) {
                 if (file.getName() != null && file.getName().startsWith("thumb_")) {
                     file.delete();
                 }
-                
             }
         } else {
             File packDir = new File(new File(rootPath), packId);
             if (!packDir.exists()) return;
+            // Delete the thumbnails/ subfolder entirely
+            File thumbDir = new File(packDir, "thumbnails");
+            if (thumbDir.exists()) deleteRecursive(thumbDir);
+            // Also clean up any legacy flat thumb_ files from older versions
             File[] files = packDir.listFiles();
-            if (files == null) return;
-            for (File f : files) {
-                if (f.getName().startsWith("thumb_")) {
-                    f.delete();
+            if (files != null) {
+                for (File f : files) {
+                    if (f.getName().startsWith("thumb_")) f.delete();
                 }
             }
         }
 
-        // NEW: Clean up the local mirror cache for this pack
+        // Clean up the local mirror cache for this pack
         StickerContentProvider.deleteMirrorPack(context, packId);
     }
 
@@ -277,9 +285,9 @@ public class WastickerParser {
     // ------------------------------------------------------------------------
 
     /**
-     * Generates a WebP thumbnail for a sticker inside its pack folder.
+     * Generates a WebP thumbnail for a sticker inside its pack's {@code thumbnails/} subfolder.
+     * Thumbnail path: {@code <pack_root>/<packId>/thumbnails/thumb_<fileName>}
      * The thumbnail size is determined by StickerProcessor.THUMB_SIZE.
-     * Uses the prefix "thumb_" + originalFileName.
      */
     private static void generateThumbnailForSticker(Context context, String packId, String fileName)
             throws IOException {
@@ -290,14 +298,15 @@ public class WastickerParser {
         if (isCustomPathUri(context)) {
             StickerContentProvider provider = StickerContentProvider.getInstance();
             DocumentFile original;
-            DocumentFile thumb;
+            DocumentFile thumbDir;
             if (provider != null) {
                 // Cache-coherent path: avoids the findFile()/findFile()/createFile()
                 // chain (2-3 SAF IPC round-trips per sticker) that made bulk
                 // thumbnail generation slow on SD-card-backed folders.
                 original = provider.getOrCreateSafFileCached(context, packId, fileName, null);
                 if (original == null || !original.exists()) return;
-                thumb = provider.getOrCreateSafFileCached(context, packId, thumbName, "image/webp");
+                // Get or create the thumbnails/ subfolder
+                thumbDir = provider.getOrCreateSafSubdirCached(context, packId, "thumbnails");
             } else {
                 // Fallback: provider not yet created, use direct (uncached) lookups.
                 DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
@@ -306,11 +315,12 @@ public class WastickerParser {
                 if (packDir == null) return;
                 original = packDir.findFile(fileName);
                 if (original == null || !original.exists()) return;
-                thumb = packDir.findFile(thumbName);
-                if (thumb == null) {
-                    thumb = packDir.createFile("image/webp", thumbName);
-                }
+                thumbDir = packDir.findFile("thumbnails");
+                if (thumbDir == null) thumbDir = packDir.createDirectory("thumbnails");
             }
+            if (thumbDir == null) return;
+            DocumentFile thumb = thumbDir.findFile(thumbName);
+            if (thumb == null) thumb = thumbDir.createFile("image/webp", thumbName);
             if (thumb != null) {
                 StickerProcessor.createThumbnail(context, original.getUri(), thumb.getUri());
                 // Drop any stale internal-storage mirror so the next read re-mirrors
@@ -319,15 +329,16 @@ public class WastickerParser {
                 if (staleMirror.exists()) staleMirror.delete();
             }
         } else {
-            // ─── Internal storage path ──────────────────────────────────
+            // ─── Internal storage path ──────────────────────────────────────────────
             File packDir = new File(new File(rootPath), packId);
             File original = new File(packDir, fileName);
             if (!original.exists()) return;
-            File thumb = new File(packDir, thumbName);
+            File thumbSubDir = new File(packDir, "thumbnails");
+            if (!thumbSubDir.exists()) thumbSubDir.mkdirs();
+            File thumb = new File(thumbSubDir, thumbName);
             StickerProcessor.createThumbnail(original, thumb);
 
-            // 🔥 Also delete the mirror file (even though internal storage doesn't use
-            // the mirror by default, it's safe to clean up in case a mirror exists).
+            // Also clean up any stale mirror file
             File staleMirror = new File(StickerContentProvider.getThumbMirrorDir(context, packId), thumbName);
             if (staleMirror.exists()) staleMirror.delete();
         }
@@ -1003,7 +1014,22 @@ public class WastickerParser {
         JSONArray stickersArray = new JSONArray();
         for (int i = 0; i < items.size(); i++) {
             EditStickerAdapter.StickerItem item = items.get(i);
-            String fileName = (i + 1) + ".webp";
+
+            // FIX: previously every item was force-renamed to "(i+1).webp"
+            // here, regardless of its actual current filename. Packs
+            // imported from tg-wa.py use "sticker_N.webp" naming, so that
+            // never matched, and copyWithinStorage() (full file copy +
+            // thumbnail regen) fired for every single sticker on every
+            // single save — including a pure pack-rename with zero sticker
+            // changes. contents.json doesn't require sequential filenames
+            // (order comes from array position), so unchanged stickers
+            // staying in this pack just keep their existing file untouched.
+            boolean unchangedInSamePack = item.newUri == null
+                    && item.packIdentifier != null
+                    && item.packIdentifier.equals(identifier)
+                    && item.fileName != null;
+
+            String fileName = unchangedInSamePack ? item.fileName : (i + 1) + ".webp";
 
             JSONObject stickerJson = new JSONObject();
             stickerJson.put("image_file", fileName);
@@ -1019,10 +1045,8 @@ public class WastickerParser {
 
             if (item.newUri != null) {
                 processAndSaveImage(context, item.newUri, identifier, fileName, false, preloadedPackDir);
-            } else if (item.packIdentifier != null && item.fileName != null) {
-                if (!item.packIdentifier.equals(identifier) || !item.fileName.equals(fileName)) {
-                    copyWithinStorage(context, item.packIdentifier, item.fileName, identifier, fileName);
-                }
+            } else if (!unchangedInSamePack && item.packIdentifier != null && item.fileName != null) {
+                copyWithinStorage(context, item.packIdentifier, item.fileName, identifier, fileName);
             }
         }
         packJson.put("stickers", stickersArray);
