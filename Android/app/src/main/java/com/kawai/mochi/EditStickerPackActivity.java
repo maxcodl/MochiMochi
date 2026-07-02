@@ -62,7 +62,10 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
         MaterialButton saveButton = findViewById(R.id.save_button);
 
         stickerItems = new ArrayList<>();
-        adapter = new EditStickerAdapter(stickerItems, this);
+
+        boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(this);
+        adapter = new EditStickerAdapter(stickerItems, animationsEnabled, this); 
+        
         stickerGrid.setLayoutManager(new GridLayoutManager(this, 4));
         stickerGrid.setAdapter(adapter);
 

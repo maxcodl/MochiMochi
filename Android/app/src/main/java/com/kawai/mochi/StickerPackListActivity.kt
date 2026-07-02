@@ -430,17 +430,26 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         if (rvWidth <= 0) return
 
         val density = resources.displayMetrics.density
-        val overhead = Math.round((12 + 12 + 16 + 16 + 48) * density)
+        // Correct overhead: Card margins (12+12) + RV start (16) + RV to button (16) + button (48) + button end (16)
+        val overhead = Math.round((12 + 12 + 16 + 16 + 48 + 16) * density)
         val imageRowWidth = rvWidth - overhead
         if (imageRowWidth <= 0) return
 
-        val previewSize = resources.getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size)
-        val maxNumberOfImagesInARow = Math.min(STICKER_PREVIEW_DISPLAY_LIMIT, Math.max(imageRowWidth / previewSize, 1))
-        val minMarginBetweenImages = if (maxNumberOfImagesInARow > 1) {
+        val maxNumberOfImagesInARow = STICKER_PREVIEW_DISPLAY_LIMIT
+        
+        // Aim for a small fixed margin between stickers
+        val desiredMargin = Math.round(4 * density)
+        val totalMargin = desiredMargin * (maxNumberOfImagesInARow - 1)
+        
+        // Calculate the preview size that allows exactly 5 stickers to fit
+        val previewSize = (imageRowWidth - totalMargin) / maxNumberOfImagesInARow
+        
+        // Recalculate actual margin to distribute any rounding remainder
+        val actualMargin = if (maxNumberOfImagesInARow > 1) {
             (imageRowWidth - maxNumberOfImagesInARow * previewSize) / (maxNumberOfImagesInARow - 1)
         } else 0
         
-        allStickerPacksListAdapter.setImageRowSpec(maxNumberOfImagesInARow, minMarginBetweenImages)
+        allStickerPacksListAdapter.setImageRowSpec(maxNumberOfImagesInARow, actualMargin, previewSize)
         
         if (packRecyclerView.viewTreeObserver.isAlive) {
             packRecyclerView.viewTreeObserver.removeOnGlobalLayoutListener(globalLayoutListener)

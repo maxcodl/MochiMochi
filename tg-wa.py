@@ -1354,7 +1354,9 @@ async def create_wastickers_zip(
             # built via this (non-return_valid_results) path also carry one.
             try:
                 thumb_bytes = generate_thumbnail_from_webp_bytes(result['bytes'])
-                with open(work_dir / f"thumb_{sticker_filename}", 'wb') as f:
+                thumbs_dir = work_dir / "thumbnails"
+                thumbs_dir.mkdir(exist_ok=True)
+                with open(thumbs_dir / f"thumb_{sticker_filename}", 'wb') as f:
                     f.write(thumb_bytes)
             except Exception as e:
                 logger.warning(f"Failed to generate thumbnail for {sticker_filename}: {e}")
@@ -1432,11 +1434,13 @@ def _build_wasticker_zip_from_valid_entries(
             # Pre-generate the thumbnail here, at pack-build time on the bot,
             # instead of leaving it for the Android app to decode/resize/
             # re-encode on-device during import. The app just needs to see
-            # "thumb_<filename>" already sitting next to the sticker and copy
-            # it in — see WastickerParser.importStickerPack() on the app side.
+            # "thumbnails/thumb_<filename>" inside the zip and copy it into
+            # its thumbnails/ subfolder — see WastickerParser.importStickerPack().
             try:
                 thumb_bytes = generate_thumbnail_from_webp_bytes(entry['bytes'])
-                thumb_path = work_dir / f"thumb_{sticker_filename}"
+                thumbs_dir = work_dir / "thumbnails"
+                thumbs_dir.mkdir(exist_ok=True)
+                thumb_path = thumbs_dir / f"thumb_{sticker_filename}"
                 with open(thumb_path, 'wb') as f:
                     f.write(thumb_bytes)
             except Exception as e:
@@ -1455,7 +1459,12 @@ def _build_wasticker_zip_from_valid_entries(
         zip_path = packs_dir / f"{set_name}.wasticker"
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             for file_path in work_dir.iterdir():
-                zipf.write(file_path, file_path.name)
+                if file_path.is_dir():
+                    # Write directory contents with relative paths (e.g. thumbnails/thumb_x.webp)
+                    for sub_file in file_path.iterdir():
+                        zipf.write(sub_file, f"{file_path.name}/{sub_file.name}")
+                else:
+                    zipf.write(file_path, file_path.name)
         return zip_path
     finally:
         if work_dir.exists():

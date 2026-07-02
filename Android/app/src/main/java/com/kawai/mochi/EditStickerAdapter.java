@@ -51,9 +51,12 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
 
     private final List<StickerItem> items;
     private final OnStickerActionListener listener;
+    private final boolean animationsEnabled; // NEW: Track the animation setting
 
-    public EditStickerAdapter(List<StickerItem> items, OnStickerActionListener listener) {
+    // NEW: Updated constructor to accept the animation setting
+    public EditStickerAdapter(List<StickerItem> items, boolean animationsEnabled, OnStickerActionListener listener) {
         this.items = items;
+        this.animationsEnabled = animationsEnabled;
         this.listener = listener;
     }
 
@@ -100,7 +103,7 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
                 
                 DraweeController controller = Fresco.newDraweeControllerBuilder()
                         .setImageRequest(request)
-                        .setAutoPlayAnimations(true)
+                        .setAutoPlayAnimations(animationsEnabled) // FIXED: Now respects your performance setting!
                         .setOldController(holder.stickerImage.getController())
                         .build();
                 holder.stickerImage.setController(controller);
@@ -109,6 +112,8 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
             holder.stickerImage.setController(null);
             holder.stickerImage.setTag(R.id.sticker_image, null);
         }
+        
+
 
         // Show emojis
         if (item.emojis != null && !item.emojis.isEmpty()) {

@@ -31,6 +31,7 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
     private final OnAddButtonClickedListener onAddButtonClickedListener;
     private int maxNumberOfStickersInARow;
     private int minMarginBetweenImages;
+    private int dynamicPreviewSize;
 
     private final RecyclerView.RecycledViewPool sharedPool = new RecyclerView.RecycledViewPool();
 
@@ -112,8 +113,16 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
                 pack.animatedStickerPack ? View.VISIBLE : View.GONE);
 
         if (pack.getStickers() != null && maxNumberOfStickersInARow > 0) {
-            final int previewSize = context.getResources()
-                    .getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
+            final int previewSize = dynamicPreviewSize > 0 ? dynamicPreviewSize : 
+                    context.getResources().getDimensionPixelSize(R.dimen.sticker_pack_list_item_preview_image_size);
+            
+            // Adjust height of the recycler view to match dynamic preview size
+            ViewGroup.LayoutParams rvLp = viewHolder.imageRowView.getLayoutParams();
+            if (rvLp.height != previewSize) {
+                rvLp.height = previewSize;
+                viewHolder.imageRowView.setLayoutParams(rvLp);
+            }
+
             int numToShow = Math.min(maxNumberOfStickersInARow, pack.getStickers().size());
             List<Sticker> previewStickers = pack.getStickers().subList(0, numToShow);
 
@@ -172,12 +181,13 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
         }
     }
 
-    void setImageRowSpec(int maxNumberOfStickersInARow, int minMarginBetweenImages) {
+    void setImageRowSpec(int maxNumberOfStickersInARow, int minMarginBetweenImages, int previewSize) {
         this.minMarginBetweenImages = minMarginBetweenImages;
+        this.dynamicPreviewSize = previewSize;
         if (this.maxNumberOfStickersInARow != maxNumberOfStickersInARow) {
             this.maxNumberOfStickersInARow = maxNumberOfStickersInARow;
-            notifyItemRangeChanged(0, getItemCount());
         }
+        notifyItemRangeChanged(0, getItemCount());
     }
 
     void invalidateAnimationsCache() {

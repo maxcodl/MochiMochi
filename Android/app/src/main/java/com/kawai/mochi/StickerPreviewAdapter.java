@@ -99,7 +99,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     public void prefetchThumbnails() {
         if (stickers == null) return;
         for (Sticker sticker : stickers) {
-            String thumbName = "thumb_" + sticker.imageFileName;
+            String thumbName = "thumbnails/thumb_" + sticker.imageFileName;
             Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, thumbName);
             ImageRequest request = ImageRequestBuilder.newBuilderWithSource(thumbUri)
                     .setLocalThumbnailPreviewsEnabled(true)
@@ -139,7 +139,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         holder.bitmapView.setVisibility(View.GONE);
         holder.draweeView.setVisibility(View.VISIBLE);
 
-        String thumbName = "thumb_" + sticker.imageFileName;
+        String thumbName = "thumbnails/thumb_" + sticker.imageFileName;
         final Uri thumbUri = StickerPackLoader.getStickerAssetUri(packIdentifier, thumbName);
         final Uri fullUri = StickerPackLoader.getStickerAssetUri(packIdentifier, sticker.imageFileName);
 
@@ -208,7 +208,15 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         if (WastickerParser.isCustomPathUri(context)) {
             return true;
         } else {
-            File thumbFile = new File(new File(rootPath, packId), thumbName);
+            // thumbName is "thumbnails/thumb_<file>" — resolve relative to pack dir
+            String flatName = thumbName.contains("/")
+                    ? thumbName.substring(thumbName.lastIndexOf('/') + 1)
+                    : thumbName;
+            File thumbFile = new File(new File(new File(rootPath, packId), "thumbnails"), flatName);
+            // Also accept legacy flat location
+            if (!thumbFile.exists()) {
+                thumbFile = new File(new File(rootPath, packId), flatName);
+            }
             return thumbFile.exists();
         }
     }

@@ -30,6 +30,7 @@ public class EntryActivity extends BaseActivity {
     private LinearProgressIndicator progressBar;
     private View logoContainer;
     private TextView errorMessageText;
+    private TextView importStatusText;
     private final AtomicBoolean taskCancelled = new AtomicBoolean(false);
 
     @Override
@@ -43,6 +44,7 @@ public class EntryActivity extends BaseActivity {
         progressBar = findViewById(R.id.entry_activity_progress);
         logoContainer = findViewById(R.id.logo_container);
         errorMessageText = findViewById(R.id.error_message);
+        importStatusText = findViewById(R.id.import_status_text);
 
         // Simple fade in animation for the logo
         AlphaAnimation fadeIn = new AlphaAnimation(0.0f, 1.0f);
@@ -72,6 +74,7 @@ public class EntryActivity extends BaseActivity {
 
     private void showStickerPack(ArrayList<StickerPack> stickerPackList) {
         if (progressBar != null) progressBar.setVisibility(View.GONE);
+        if (importStatusText != null) importStatusText.setVisibility(View.GONE);
         // Always go to list screen
         final Intent intent = new Intent(this, StickerPackListActivity.class);
         intent.putParcelableArrayListExtra(StickerPackListActivity.EXTRA_STICKER_PACK_LIST_DATA, stickerPackList);
@@ -82,6 +85,7 @@ public class EntryActivity extends BaseActivity {
 
     private void showErrorMessage(String errorMessage) {
         if (progressBar != null) progressBar.setVisibility(View.GONE);
+        if (importStatusText != null) importStatusText.setVisibility(View.GONE);
         Log.e("EntryActivity", "error fetching sticker packs, " + errorMessage);
         
         if (errorMessageText != null) {
@@ -145,6 +149,10 @@ public class EntryActivity extends BaseActivity {
     }
 
     private void loadWasticker(Uri uri) {
+        if (importStatusText != null) {
+            importStatusText.setVisibility(View.VISIBLE);
+            importStatusText.setText(R.string.importing_pack);
+        }
         WeakReference<EntryActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
             EntryActivity activity = ref.get();
@@ -157,6 +165,10 @@ public class EntryActivity extends BaseActivity {
                             activity.progressBar.setIndeterminate(false);
                             activity.progressBar.setMax(total);
                             activity.progressBar.setProgressCompat(current, true);
+                        }
+                        if (activity.importStatusText != null) {
+                            activity.importStatusText.setVisibility(View.VISIBLE);
+                            activity.importStatusText.setText(activity.getString(R.string.import_progress, current, total));
                         }
                     });
                 });

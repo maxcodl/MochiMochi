@@ -29,12 +29,13 @@
         android:id="@+id/import_progress_bar"
         android:layout_width="200dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="32dp"
+        android:layout_marginTop="12dp"
         android:indeterminate="true"
-        app:trackCornerRadius="4dp"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.497"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/logo_container" />
+        app:layout_constraintTop_toBottomOf="@id/logo_container"
+        app:trackCornerRadius="4dp" />
 
     <TextView
         android:id="@+id/import_status_text"
