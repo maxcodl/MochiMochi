@@ -1015,15 +1015,6 @@ public class WastickerParser {
         for (int i = 0; i < items.size(); i++) {
             EditStickerAdapter.StickerItem item = items.get(i);
 
-            // FIX: previously every item was force-renamed to "(i+1).webp"
-            // here, regardless of its actual current filename. Packs
-            // imported from tg-wa.py use "sticker_N.webp" naming, so that
-            // never matched, and copyWithinStorage() (full file copy +
-            // thumbnail regen) fired for every single sticker on every
-            // single save — including a pure pack-rename with zero sticker
-            // changes. contents.json doesn't require sequential filenames
-            // (order comes from array position), so unchanged stickers
-            // staying in this pack just keep their existing file untouched.
             boolean unchangedInSamePack = item.newUri == null
                     && item.packIdentifier != null
                     && item.packIdentifier.equals(identifier)
