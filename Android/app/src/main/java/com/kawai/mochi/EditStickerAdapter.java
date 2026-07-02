@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.facebook.drawee.backends.pipeline.Fresco;
 import com.facebook.drawee.interfaces.DraweeController;
 import com.facebook.drawee.view.SimpleDraweeView;
+import com.facebook.imagepipeline.common.ImageDecodeOptions;
 import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.request.ImageRequestBuilder;
@@ -97,9 +98,20 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
                 // Animated stickers decode at 40% of display size to reduce per-frame memory and CPU
                 int renderSize = item.isAnimated ? (int) (size * 0.40f) : size;
                 
-                ImageRequest request = ImageRequestBuilder.newBuilderWithSource(uri)
-                        .setResizeOptions(new ResizeOptions(renderSize, renderSize))
-                        .build();
+                ImageRequestBuilder requestBuilder = ImageRequestBuilder.newBuilderWithSource(uri)
+                        .setResizeOptions(new ResizeOptions(renderSize, renderSize));
+
+                if (item.isAnimated && !animationsEnabled) {
+                    // Performance mode: decode a single static frame instead of the
+                    // full animated sequence. setAutoPlayAnimations(false) alone still
+                    // decodes every frame into memory, it just doesn't play them.
+                    requestBuilder.setImageDecodeOptions(
+                            ImageDecodeOptions.newBuilder()
+                                    .setForceStaticImage(true)
+                                    .build());
+                }
+
+                ImageRequest request = requestBuilder.build();
                 
                 DraweeController controller = Fresco.newDraweeControllerBuilder()
                         .setImageRequest(request)
@@ -143,6 +155,16 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
     @Override
     public int getItemCount() {
         return items.size();
+    }
+
+    @Override
+    public void onViewRecycled(@NonNull ViewHolder holder) {
+        super.onViewRecycled(holder);
+        // Free the decoded bitmap/frame memory for cells that are no longer visible.
+        // Without this, controllers (and the animated frame buffers Fresco holds for
+        // them) stay alive for every cell that has ever been bound.
+        holder.stickerImage.setController(null);
+        holder.stickerImage.setTag(R.id.sticker_image, null);
     }
 
     static class ViewHolder extends RecyclerView.ViewHolder {
