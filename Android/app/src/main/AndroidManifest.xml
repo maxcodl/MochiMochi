@@ -25,26 +25,19 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Intent filter for .wasticker files (Full Sticker Packs) -->
+            <!-- Handles both direct taps and shares of sticker packs. We accept broadly
+                 by file type here (filename-based filtering is unreliable - many apps,
+                 including Telegram, don't expose the real filename to Android at all).
+                 EntryActivity.looksLikeStickerPack() validates the actual contents after
+                 receiving the file, and rejects anything that isn't a real pack. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="content" />
-                <data android:scheme="file" />
-                <data android:host="*" />
-                <data android:mimeType="*/*" />
-                <data android:pathPattern=".*\\.wasticker" />
-            </intent-filter>
-            <!-- Catch by MIME type for apps that share correctly -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="android.intent.action.SEND" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:mimeType="application/octet-stream" />
                 <data android:mimeType="application/zip" />
                 <data android:mimeType="application/x-zip-compressed" />
+                <data android:mimeType="application/octet-stream" />
             </intent-filter>
         </activity>
 
