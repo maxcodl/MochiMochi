@@ -814,6 +814,118 @@ public class WastickerParser {
     //  Public API: delete, export, save, merge, etc.
     // ------------------------------------------------------------------------
 
+    /**
+     * Minimum stickers WhatsApp requires in a pack before it can be added.
+     * Used to block a delete that would leave the pack in an unaddable state.
+     */
+    private static final int WA_MIN_STICKERS_PER_PACK = 3;
+
+    /**
+     * Deletes a single sticker from a pack: removes its entry from
+     * contents.json, deletes the sticker file and its thumbnail, then
+     * invalidates the content provider and notifies listeners — mirroring
+     * deleteStickerPack()'s pattern so the change takes effect everywhere
+     * (list screen, details screen, WhatsApp's own pack validator) without
+     * needing an app restart.
+     *
+     * @throws IllegalStateException if deleting would drop the pack below
+     *         WhatsApp's minimum of 3 stickers per pack.
+     */
+    public static void deleteSticker(Context context, String packIdentifier, String stickerFileName)
+            throws IOException, JSONException {
+        // 1. Remove the sticker's entry from contents.json
+        JSONObject masterRoot = getOrSeedMasterRoot(context);
+        JSONArray masterPacks = masterRoot.optJSONArray("sticker_packs");
+        if (masterPacks == null) return;
+
+        JSONObject targetPack = null;
+        int targetPackIndex = -1;
+        for (int i = 0; i < masterPacks.length(); i++) {
+            JSONObject pack = masterPacks.getJSONObject(i);
+            if (pack.optString("identifier").equals(packIdentifier)) {
+                targetPack = pack;
+                targetPackIndex = i;
+                break;
+            }
+        }
+        if (targetPack == null) {
+            throw new IOException("Pack not found: " + packIdentifier);
+        }
+
+        JSONArray stickers = targetPack.optJSONArray("stickers");
+        if (stickers == null) return;
+
+        if (stickers.length() - 1 < WA_MIN_STICKERS_PER_PACK) {
+            throw new IllegalStateException(
+                    "Can't delete — WhatsApp requires at least " + WA_MIN_STICKERS_PER_PACK
+                            + " stickers per pack, and this pack would only have "
+                            + (stickers.length() - 1) + " left.");
+        }
+
+        JSONArray updatedStickers = new JSONArray();
+        boolean found = false;
+        for (int i = 0; i < stickers.length(); i++) {
+            JSONObject sticker = stickers.getJSONObject(i);
+            if (!found && sticker.optString("image_file").equals(stickerFileName)) {
+                found = true; // skip this one — it's the one being deleted
+                continue;
+            }
+            updatedStickers.put(sticker);
+        }
+        if (!found) {
+            throw new IOException("Sticker not found in pack: " + stickerFileName);
+        }
+
+        targetPack.put("stickers", updatedStickers);
+        masterPacks.put(targetPackIndex, targetPack);
+        masterRoot.put("sticker_packs", masterPacks);
+        saveMasterContents(context, masterRoot);
+
+        // 2. Delete the physical sticker file + its thumbnail (SAF or internal)
+        String rootPath = getStickerFolderPath(context);
+        String thumbName = "thumb_" + stickerFileName;
+
+        if (isCustomPathUri(context)) {
+            DocumentFile root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath));
+            DocumentFile packDir = root != null ? root.findFile(packIdentifier) : null;
+            if (packDir != null) {
+                DocumentFile stickerFile = packDir.findFile(stickerFileName);
+                if (stickerFile != null && stickerFile.exists()) stickerFile.delete();
+                DocumentFile thumbDir = packDir.findFile("thumbnails");
+                if (thumbDir != null) {
+                    DocumentFile thumbFile = thumbDir.findFile(thumbName);
+                    if (thumbFile != null && thumbFile.exists()) thumbFile.delete();
+                }
+                // Legacy flat thumbnail location, just in case
+                DocumentFile legacyThumb = packDir.findFile(thumbName);
+                if (legacyThumb != null && legacyThumb.exists()) legacyThumb.delete();
+            }
+        } else {
+            File packDir = new File(new File(rootPath), packIdentifier);
+            File stickerFile = new File(packDir, stickerFileName);
+            if (stickerFile.exists()) stickerFile.delete();
+            File thumbFile = new File(new File(packDir, "thumbnails"), thumbName);
+            if (thumbFile.exists()) thumbFile.delete();
+            // Legacy flat thumbnail location, just in case
+            File legacyThumb = new File(packDir, thumbName);
+            if (legacyThumb.exists()) legacyThumb.delete();
+        }
+
+        // 3. Drop any stale internal-storage thumbnail mirror
+        File staleMirror = new File(StickerContentProvider.getThumbMirrorDir(context, packIdentifier), thumbName);
+        if (staleMirror.exists()) staleMirror.delete();
+
+        // 4. Invalidate in-memory caches and notify listeners — this is the
+        // step that was missing before: without it, the list/details screens
+        // and WhatsApp's own content-provider-backed validator keep serving
+        // the old sticker count until the app restarts.
+        StickerContentProvider provider = StickerContentProvider.getInstance();
+        if (provider != null) {
+            provider.invalidateStickerPackList();
+        }
+        StickerUpdateManager.triggerUpdate();
+    }
+
     public static void deleteStickerPack(Context context, String identifier) throws IOException, JSONException {
         // 1. Remove the pack from contents.json
         JSONObject masterRoot = getOrSeedMasterRoot(context);
@@ -1015,6 +1127,15 @@ public class WastickerParser {
         for (int i = 0; i < items.size(); i++) {
             EditStickerAdapter.StickerItem item = items.get(i);
 
+            // FIX: previously every item was force-renamed to "(i+1).webp"
+            // here, regardless of its actual current filename. Packs
+            // imported from tg-wa.py use "sticker_N.webp" naming, so that
+            // never matched, and copyWithinStorage() (full file copy +
+            // thumbnail regen) fired for every single sticker on every
+            // single save — including a pure pack-rename with zero sticker
+            // changes. contents.json doesn't require sequential filenames
+            // (order comes from array position), so unchanged stickers
+            // staying in this pack just keep their existing file untouched.
             boolean unchangedInSamePack = item.newUri == null
                     && item.packIdentifier != null
                     && item.packIdentifier.equals(identifier)

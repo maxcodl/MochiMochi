@@ -64,6 +64,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     private View addButton;
     private View alreadyAddedText;
     private StickerPack stickerPack;
+    @Nullable
+    private Sticker currentExpandedSticker;
     private View divider;
     private View expandedStickerOverlay;
     private View expandedStickerCard;
@@ -71,6 +73,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     private TextView expandedStickerName;
     private TextView expandedStickerEmojis;
     private TextView expandedStickerSize;
+    private MaterialButton editEmojiButton;
+    private MaterialButton deleteStickerButton;
     private boolean expandedPreviewVisible;
     private volatile boolean whitelistCheckCancelled;
     private ActivityResultLauncher<Intent> editPackLauncher;
@@ -148,6 +152,8 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         expandedStickerName = findViewById(R.id.expanded_sticker_name);
         expandedStickerEmojis = findViewById(R.id.expanded_sticker_emojis);
         expandedStickerSize = findViewById(R.id.expanded_sticker_size);
+        editEmojiButton = findViewById(R.id.edit_emoji_button);
+        deleteStickerButton = findViewById(R.id.delete_sticker_button);
 
         setupExpandedPreview();
         
@@ -258,10 +264,53 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         expandedStickerCard.setOnClickListener(v -> {
             // No-op: prevent clicks on the card from closing the overlay
         });
+
+        deleteStickerButton.setOnClickListener(v -> {
+            if (currentExpandedSticker == null || stickerPack == null) return;
+            final String fileNameToDelete = currentExpandedSticker.imageFileName;
+            final String packId = stickerPack.identifier;
+
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle(R.string.remove_sticker)
+                    .setMessage("Delete this sticker? This can't be undone.")
+                    .setPositiveButton(R.string.delete_button, (dialog, which) -> {
+                        WeakReference<StickerPackDetailsActivity> ref = new WeakReference<>(this);
+                        executor.execute(() -> {
+                            String error;
+                            try {
+                                WastickerParser.deleteSticker(ref.get(), packId, fileNameToDelete);
+                                error = null;
+                            } catch (Exception e) {
+                                error = e.getMessage();
+                            }
+                            final String finalError = error;
+                            mainHandler.post(() -> {
+                                StickerPackDetailsActivity act = ref.get();
+                                if (act == null) return;
+                                if (finalError != null) {
+                                    Toast.makeText(act, getString(R.string.error_with_message, finalError), Toast.LENGTH_LONG).show();
+                                } else {
+                                    Toast.makeText(act, "Sticker deleted", Toast.LENGTH_SHORT).show();
+                                    act.hideExpandedPreview();
+                                    // Content provider + StickerUpdateManager are already
+                                    // notified inside deleteSticker() itself, so the list
+                                    // screen's own onResume() refresh will pick this up too.
+                                    // reloadStickerPack() here just refreshes THIS screen
+                                    // immediately rather than waiting for a future resume.
+                                    act.reloadStickerPack();
+                                }
+                            });
+                        });
+                    })
+                    .setNegativeButton(R.string.cancel, null)
+                    .show();
+        });
+
         hideExpandedPreviewImmediate();
     }
 
     private void showExpandedPreview(@NonNull Sticker sticker, @NonNull Uri stickerUri, boolean animatedPack) {
+        currentExpandedSticker = sticker;
         expandedStickerName.setText(sticker.imageFileName);
         if (sticker.emojis == null || sticker.emojis.isEmpty()) {
             expandedStickerEmojis.setText("-");
