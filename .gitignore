@@ -46,6 +46,7 @@ wasticker_packs/
 *copy*.py
 config.json
 source_tree.txt
+build-sign-install.bat
 
 # ─── Android (Gradle) ─────────────────────────────────────────────────────────
 Android/.gradle/
