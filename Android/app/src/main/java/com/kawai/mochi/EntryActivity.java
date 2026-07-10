@@ -18,11 +18,14 @@ import androidx.annotation.Nullable;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.kawai.mochi.R;
 
+import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 public class EntryActivity extends BaseActivity {
     private static final ExecutorService executor = Executors.newFixedThreadPool(2);
@@ -148,6 +151,31 @@ public class EntryActivity extends BaseActivity {
         });
     }
 
+    /**
+     * Peeks inside the zip to confirm it actually looks like a MochiMochi sticker pack,
+     * before we hand it to the real parser. This assumes packs contain a root-level
+     * "contents.json" marker file (standard convention for this kind of sticker app).
+     * If your pack format uses a different marker file, swap the name below.
+     */
+    private boolean looksLikeStickerPack(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             ZipInputStream zipIn = new ZipInputStream(in)) {
+            if (in == null) return false;
+            ZipEntry entry;
+            while ((entry = zipIn.getNextEntry()) != null) {
+                String name = entry.getName();
+                String fileName = name.contains("/") ? name.substring(name.lastIndexOf('/') + 1) : name;
+                if ("contents.json".equalsIgnoreCase(fileName)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            Log.e("EntryActivity", "error validating sticker pack zip", e);
+            return false;
+        }
+        return false;
+    }
+
     private void loadWasticker(Uri uri) {
         if (importStatusText != null) {
             importStatusText.setVisibility(View.VISIBLE);
@@ -157,6 +185,17 @@ public class EntryActivity extends BaseActivity {
         executor.execute(() -> {
             EntryActivity activity = ref.get();
             if (activity == null) return;
+
+            if (!activity.looksLikeStickerPack(uri)) {
+                mainHandler.post(() -> {
+                    EntryActivity act = ref.get();
+                    if (act == null) return;
+                    Toast.makeText(act, "This isn't a MochiMochi sticker pack", Toast.LENGTH_LONG).show();
+                    act.loadList();
+                });
+                return;
+            }
+
             Pair<String, ArrayList<StickerPack>> result;
             try {
                 WastickerParser.importStickerPack(activity, uri, (current, total) -> {
