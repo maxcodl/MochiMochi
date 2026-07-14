@@ -1907,8 +1907,8 @@ async def process_stickers(
                     for reason, count in top_reasons:
                         caption += f"\n- {count}x {reason}"
         if valid_count_total > 30:
-            caption += f"\n\n{valid_count_total} stickers"
-
+            #caption += f"\n\n{valid_count_total} stickers"
+            caption += f"\n\n"
         elapsed = _format_elapsed(time.monotonic() - _pack_start_time)
         caption += f"\nConverted in {elapsed}"
 
