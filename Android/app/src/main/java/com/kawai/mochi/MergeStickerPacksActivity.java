@@ -1,6 +1,5 @@
 package com.kawai.mochi;
 
-import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -22,7 +21,6 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
-import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;

@@ -1,6 +1,4 @@
 package com.kawai.mochi;
-
-import android.content.Intent;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -10,7 +8,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialogFragment;
 
 /**
  * Bottom sheet that offers two import paths:
- *   1. Import from file (.wasticker) — existing behaviour
+ *   1. Import from file (.wasticker) — existing behavior
  *   2. Import from Telegram URL — new feature
  */
 public class ImportChoiceBottomSheet extends BottomSheetDialogFragment {

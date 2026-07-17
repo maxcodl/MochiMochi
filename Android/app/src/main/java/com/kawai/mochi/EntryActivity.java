@@ -1,6 +1,4 @@
 package com.kawai.mochi;
-
-import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -12,12 +10,8 @@ import android.view.View;
 import android.view.animation.AlphaAnimation;
 import android.widget.TextView;
 import android.widget.Toast;
-
 import androidx.annotation.Nullable;
-
 import com.google.android.material.progressindicator.LinearProgressIndicator;
-import com.kawai.mochi.R;
-
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -31,10 +25,13 @@ public class EntryActivity extends BaseActivity {
     private static final ExecutorService executor = Executors.newFixedThreadPool(2);
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
     private LinearProgressIndicator progressBar;
-    private View logoContainer;
     private TextView errorMessageText;
     private TextView importStatusText;
-    private final AtomicBoolean taskCancelled = new AtomicBoolean(false);
+    private final AtomicBoolean taskCancelled;
+
+    public EntryActivity() {
+        taskCancelled = new AtomicBoolean(false);
+    }
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -45,7 +42,7 @@ public class EntryActivity extends BaseActivity {
             getSupportActionBar().hide();
         }
         progressBar = findViewById(R.id.entry_activity_progress);
-        logoContainer = findViewById(R.id.logo_container);
+        View logoContainer = findViewById(R.id.logo_container);
         errorMessageText = findViewById(R.id.error_message);
         importStatusText = findViewById(R.id.import_status_text);
 
@@ -55,24 +52,28 @@ public class EntryActivity extends BaseActivity {
         logoContainer.startAnimation(fadeIn);
 
         // Handle incoming .wasticker share intent
-        Intent intent = getIntent();
-        Uri incomingUri = null;
-        if (Intent.ACTION_SEND.equals(intent.getAction())) {
-            incomingUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
-            // Fallback: newer Android / Telegram may use ClipData instead of EXTRA_STREAM
-            if (incomingUri == null && intent.getClipData() != null
-                    && intent.getClipData().getItemCount() > 0) {
-                incomingUri = intent.getClipData().getItemAt(0).getUri();
-            }
-        } else if (Intent.ACTION_VIEW.equals(intent.getAction())) {
-            incomingUri = intent.getData();
-        }
+        final Uri incomingUri = getIncomingUri(getIntent());
 
         if (incomingUri != null) {
             loadWasticker(incomingUri);
         } else {
             loadList();
         }
+    }
+
+    private Uri getIncomingUri(Intent intent) {
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            Uri uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (uri != null) {
+                return uri;
+            }
+            if (intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
+                return intent.getClipData().getItemAt(0).getUri();
+            }
+        } else if (Intent.ACTION_VIEW.equals(intent.getAction())) {
+            return intent.getData();
+        }
+        return null;
     }
 
     private void showStickerPack(ArrayList<StickerPack> stickerPackList) {
@@ -124,28 +125,30 @@ public class EntryActivity extends BaseActivity {
         taskCancelled.set(false);
         WeakReference<EntryActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
+            EntryActivity activity = ref.get();
+            if (activity == null || taskCancelled.get()) {
+                return;
+            }
+
             Pair<String, ArrayList<StickerPack>> result;
             try {
-                EntryActivity activity = ref.get();
-                if (activity == null || taskCancelled.get()) return;
                 ArrayList<StickerPack> stickerPackList = StickerPackLoader.fetchStickerPacks(activity);
-                if (stickerPackList.size() == 0) {
-                    result = new Pair<>(null, new ArrayList<>());
-                } else {
-                    result = new Pair<>(null, stickerPackList);
-                }
+                result = new Pair<>(null, stickerPackList);
             } catch (Exception e) {
                 Log.e("EntryActivity", "error fetching sticker packs", e);
                 result = new Pair<>(e.getMessage(), null);
             }
+
             final Pair<String, ArrayList<StickerPack>> finalResult = result;
             mainHandler.post(() -> {
-                EntryActivity activity = ref.get();
-                if (activity == null || taskCancelled.get()) return;
+                EntryActivity act = ref.get();
+                if (act == null || taskCancelled.get()) {
+                    return;
+                }
                 if (finalResult.second != null) {
-                    activity.showStickerPack(finalResult.second);
+                    act.showStickerPack(finalResult.second);
                 } else {
-                    activity.showErrorMessage(finalResult.first);
+                    act.showErrorMessage(finalResult.first);
                 }
             });
         });
@@ -158,15 +161,18 @@ public class EntryActivity extends BaseActivity {
      * If your pack format uses a different marker file, swap the name below.
      */
     private boolean looksLikeStickerPack(Uri uri) {
-        try (InputStream in = getContentResolver().openInputStream(uri);
-             ZipInputStream zipIn = new ZipInputStream(in)) {
-            if (in == null) return false;
-            ZipEntry entry;
-            while ((entry = zipIn.getNextEntry()) != null) {
-                String name = entry.getName();
-                String fileName = name.contains("/") ? name.substring(name.lastIndexOf('/') + 1) : name;
-                if ("contents.json".equalsIgnoreCase(fileName)) {
-                    return true;
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) {
+                return false;
+            }
+            try (ZipInputStream zipIn = new ZipInputStream(in)) {
+                ZipEntry entry;
+                while ((entry = zipIn.getNextEntry()) != null) {
+                    String name = entry.getName();
+                    String fileName = name.contains("/") ? name.substring(name.lastIndexOf('/') + 1) : name;
+                    if ("contents.json".equalsIgnoreCase(fileName)) {
+                        return true;
+                    }
                 }
             }
         } catch (Exception e) {
@@ -198,20 +204,18 @@ public class EntryActivity extends BaseActivity {
 
             Pair<String, ArrayList<StickerPack>> result;
             try {
-                WastickerParser.importStickerPack(activity, uri, (current, total) -> {
-                    mainHandler.post(() -> {
-                        if (activity.progressBar != null) {
-                            activity.progressBar.setIndeterminate(false);
-                            activity.progressBar.setMax(total);
-                            activity.progressBar.setProgressCompat(current, true);
-                        }
-                        if (activity.importStatusText != null) {
-                            activity.importStatusText.setVisibility(View.VISIBLE);
-                            activity.importStatusText.setText(activity.getString(R.string.import_progress, current, total));
-                        }
-                    });
-                });
-                
+                WastickerParser.importStickerPack(activity, uri, (current, total) -> mainHandler.post(() -> {
+                    if (activity.progressBar != null) {
+                        activity.progressBar.setIndeterminate(false);
+                        activity.progressBar.setMax(total);
+                        activity.progressBar.setProgressCompat(current, true);
+                    }
+                    if (activity.importStatusText != null) {
+                        activity.importStatusText.setVisibility(View.VISIBLE);
+                        activity.importStatusText.setText(activity.getString(R.string.import_progress, current, total));
+                    }
+                }));
+
                 // Invalidate the cache after importing
                 StickerContentProvider provider = StickerContentProvider.getInstance();
                 if (provider != null) {
@@ -225,10 +229,13 @@ public class EntryActivity extends BaseActivity {
                 Log.e("EntryActivity", "error importing wasticker", e);
                 result = new Pair<>(e.getMessage(), null);
             }
+
             final Pair<String, ArrayList<StickerPack>> finalResult = result;
             mainHandler.post(() -> {
                 EntryActivity act = ref.get();
-                if (act == null) return;
+                if (act == null) {
+                    return;
+                }
                 if (finalResult.first != null) {
                     act.showErrorMessage(finalResult.first);
                 } else {
