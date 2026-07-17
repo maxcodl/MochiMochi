@@ -99,19 +99,27 @@ public class MergeStickerPacksActivity extends BaseActivity {
     private void loadPacks() {
         WeakReference<MergeStickerPacksActivity> ref = new WeakReference<>(this);
         executor.execute(() -> {
-            List<StickerPack> packs;
+            List<StickerPack> loaded;
             try {
-                packs = StickerPackLoader.fetchStickerPacks(ref.get());
+                loaded = StickerPackLoader.fetchStickerPacks(ref.get());
             } catch (Exception e) {
-                packs = new ArrayList<>();
+                loaded = new ArrayList<>();
             }
-            final List<StickerPack> finalPacks = packs;
+            final List<StickerPack> finalPacks = loaded;
             mainHandler.post(() -> {
                 MergeStickerPacksActivity act = ref.get();
                 if (act == null) return;
+                int oldSize = act.allPacks.size();
                 act.allPacks = finalPacks;
                 act.selectedMemo = new boolean[finalPacks.size()];
-                act.adapter.notifyDataSetChanged();
+                
+                if (oldSize > 0) {
+                    act.adapter.notifyItemRangeRemoved(0, oldSize);
+                }
+                if (!finalPacks.isEmpty()) {
+                    act.adapter.notifyItemRangeInserted(0, finalPacks.size());
+                }
+
                 act.updateCounter();
             });
         });
@@ -158,7 +166,7 @@ public class MergeStickerPacksActivity extends BaseActivity {
     private void updateCounter() {
         int total = totalSelectedStickers();
         int capped = Math.min(total, MAX_STICKERS);
-        countView.setText(capped + " / " + MAX_STICKERS);
+        countView.setText(getString(R.string.sticker_count_format, capped, MAX_STICKERS));
 
         List<Integer> sel = selectedIndices();
         boolean overLimit = total > MAX_STICKERS;
@@ -204,13 +212,27 @@ public class MergeStickerPacksActivity extends BaseActivity {
         new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.merge_packs_title)
                 .setMessage(message)
-                .setPositiveButton(R.string.merge_button_label, (d, w) -> executeMerge(idx))
+                .setPositiveButton(R.string.merge_button_label, (d, w) -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        executeMerge(idx);
+                    } else {
+                        executeMergeLegacy(idx);
+                    }
+                })
                 .setNegativeButton(R.string.cancel, null)
                 .show();
     }
 
+    private void executeMergeLegacy(List<Integer> indices) {
+        doExecuteMerge(indices, false);
+    }
+
     @RequiresApi(api = Build.VERSION_CODES.N)
     private void executeMerge(List<Integer> indices) {
+        doExecuteMerge(indices, true);
+    }
+
+    private void doExecuteMerge(List<Integer> indices, boolean useAnimatedProgress) {
         List<StickerPack> packsToMerge = new ArrayList<>();
         for (int i : indices) packsToMerge.add(allPacks.get(i));
 
@@ -225,14 +247,17 @@ public class MergeStickerPacksActivity extends BaseActivity {
         executor.execute(() -> {
             String error = null;
             try {
-                WastickerParser.mergeStickerPacks(ref.get(), packsToMerge, MAX_STICKERS, (current, total) -> {
-                    mainHandler.post(() -> {
-                        if (ref.get() != null && ref.get().progressBar != null) {
-                            ref.get().progressBar.setMax(total);
-                            ref.get().progressBar.setProgress(current, true);
+                WastickerParser.mergeStickerPacks(ref.get(), packsToMerge, MAX_STICKERS, (current, total) -> mainHandler.post(() -> {
+                    MergeStickerPacksActivity act = ref.get();
+                    if (act != null && act.progressBar != null) {
+                        act.progressBar.setMax(total);
+                        if (useAnimatedProgress && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            act.progressBar.setProgress(current, true);
+                        } else {
+                            act.progressBar.setProgress(current);
                         }
-                    });
-                });
+                    }
+                }));
                 StickerContentProvider provider = StickerContentProvider.getInstance();
                 if (provider != null) provider.invalidateStickerPackList();
             } catch (Exception e) {
@@ -278,15 +303,16 @@ public class MergeStickerPacksActivity extends BaseActivity {
             String typeLabel = pack.animatedStickerPack
                     ? holder.itemView.getContext().getString(R.string.pack_type_animated)
                     : holder.itemView.getContext().getString(R.string.pack_type_static);
-            holder.meta.setText(typeLabel + "  ·  " + pack.publisher);
-            holder.badge.setText(count + " / 30");
+            holder.meta.setText(String.format("%s  ·  %s", typeLabel, pack.publisher));
+            holder.badge.setText(holder.itemView.getContext().getString(R.string.sticker_count_format, count, 30));
             holder.checkbox.setChecked(selectedMemo != null && selectedMemo[position]);
 
             holder.card.setOnClickListener(v -> {
                 if (selectedMemo == null) return;
-                selectedMemo[holder.getBindingAdapterPosition()] =
-                        !selectedMemo[holder.getBindingAdapterPosition()];
-                holder.checkbox.setChecked(selectedMemo[holder.getBindingAdapterPosition()]);
+                int pos = holder.getBindingAdapterPosition();
+                if (pos == RecyclerView.NO_POSITION) return;
+                selectedMemo[pos] = !selectedMemo[pos];
+                holder.checkbox.setChecked(selectedMemo[pos]);
                 updateCounter();
             });
         }
@@ -294,7 +320,7 @@ public class MergeStickerPacksActivity extends BaseActivity {
         @Override
         public int getItemCount() { return allPacks.size(); }
 
-        class VH extends RecyclerView.ViewHolder {
+        static class VH extends RecyclerView.ViewHolder {
             MaterialCardView card;
             CheckBox checkbox;
             TextView name, meta, badge;

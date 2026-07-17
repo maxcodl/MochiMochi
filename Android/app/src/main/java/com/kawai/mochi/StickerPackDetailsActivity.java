@@ -230,12 +230,11 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         if (stickerPreviewAdapter == null) {
             boolean animationsEnabled = SettingsActivity.isAnimationsEnabled(this);
             stickerPreviewAdapter = new StickerPreviewAdapter(
-                    this,  // <-- FIX: added Context as first argument
+                    this,
                     stickerPack.getStickers(),
                     stickerPack.identifier,
                     getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_size),
                     getResources().getDimensionPixelSize(R.dimen.sticker_pack_details_image_padding),
-                    stickerPack.animatedStickerPack,
                     animationsEnabled,
                     /* isGridMode= */ true,
                     new StickerPreviewAdapter.StickerInteractionListener() {

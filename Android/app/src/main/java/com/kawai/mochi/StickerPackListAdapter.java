@@ -138,7 +138,7 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
                 // Update existing adapter with new data
                 adapter.updateData(previewStickers, pack.identifier,
                         previewSize, minMarginBetweenImages,
-                        pack.animatedStickerPack, animationsEnabled);
+                        animationsEnabled);
             } else {
                 // Create new adapter (with Context)
                 adapter = new StickerPreviewAdapter(
@@ -147,7 +147,6 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
                         pack.identifier,
                         previewSize,
                         minMarginBetweenImages,
-                        pack.animatedStickerPack,
                         animationsEnabled,
                         false,
                         null);
