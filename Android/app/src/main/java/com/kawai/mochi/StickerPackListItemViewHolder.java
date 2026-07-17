@@ -16,7 +16,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import com.google.android.material.button.MaterialButton;
 import com.kawai.mochi.R;
 
-class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
+public class StickerPackListItemViewHolder extends RecyclerView.ViewHolder {
 
     final View container;
     final TextView titleView;

@@ -40,7 +40,6 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
     private String packIdentifier;
     private int previewSize;
     private int marginBetween;
-    private boolean isAnimatedPack;
     private boolean animationsEnabled;          // from user settings (disable all animations)
     private boolean isAnimationsPaused;
     private final boolean isGridMode;
@@ -52,7 +51,6 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
                                  String packIdentifier,
                                  int previewSize,
                                  int marginBetween,
-                                 boolean isAnimatedPack,
                                  boolean animationsEnabled,
                                  boolean isGridMode,
                                  @Nullable StickerInteractionListener interactionListener) {
@@ -61,7 +59,6 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         this.packIdentifier = packIdentifier;
         this.previewSize = previewSize;
         this.marginBetween = marginBetween;
-        this.isAnimatedPack = isAnimatedPack;
         this.animationsEnabled = animationsEnabled;
         this.isGridMode = isGridMode;
         this.interactionListener = interactionListener;
@@ -79,14 +76,12 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
                            String newPackId,
                            int newPreviewSize,
                            int newMargin,
-                           boolean newIsAnimated,
                            boolean newAnimEnabled) {
-        boolean packChanged = !newPackId.equals(packIdentifier);
+        boolean packChanged = !java.util.Objects.equals(newPackId, packIdentifier);
         this.stickers = newStickers;
         this.packIdentifier = newPackId;
         this.previewSize = newPreviewSize;
         this.marginBetween = newMargin;
-        this.isAnimatedPack = newIsAnimated;
         this.animationsEnabled = newAnimEnabled;
 
         if (packChanged) {
@@ -147,11 +142,13 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
 
         boolean thumbExists = thumbnailFileExists(packIdentifier, thumbName);
         Uri loadUri = thumbExists ? thumbUri : fullUri;
-        int decodeSize = 0;
+        final int decodeSize;
 
         if (!thumbExists) {
-            decodeSize = Math.round(previewSize * GRID_DECODE_SCALE);
-            if (decodeSize < 1) decodeSize = previewSize;
+            int calculated = Math.round(previewSize * GRID_DECODE_SCALE);
+            decodeSize = Math.max(1, calculated);
+        } else {
+            decodeSize = 0;
         }
 
         boolean isCached = Fresco.getImagePipeline().isInBitmapMemoryCache(loadUri);
@@ -250,8 +247,11 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         holder.itemView.setOnTouchListener((v, event) -> {
             if (interactionListener != null) {
                 int action = event.getActionMasked();
-                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                    interactionListener.onStickerHoldEnded();
+                switch (action) {
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        interactionListener.onStickerHoldEnded();
+                        break;
                 }
             }
             return false;
@@ -296,16 +296,17 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
         return stickers == null ? 0 : stickers.size();
     }
 
-    class ViewHolder extends RecyclerView.ViewHolder {
+    public class ViewHolder extends RecyclerView.ViewHolder {
         final ShimmerFrameLayout skeletonView;
         final ImageView bitmapView;
+        @SuppressWarnings("deprecation")
         final SimpleDraweeView draweeView;
         final ImageView errorView;
         @Nullable Sticker sticker;
 
         final HolderControllerListener controllerListener = new HolderControllerListener();
 
-        ViewHolder(View itemView) {
+        public ViewHolder(View itemView) {
             super(itemView);
             this.skeletonView = itemView.findViewById(R.id.sticker_skeleton);
             this.bitmapView = itemView.findViewById(R.id.sticker_bitmap_preview);
@@ -329,7 +330,7 @@ public class StickerPreviewAdapter extends RecyclerView.Adapter<StickerPreviewAd
 
             @Override
             public void onFailure(String id, Throwable throwable) {
-                if (thumbUri != null && fullUri != null && !thumbUri.equals(fullUri)) {
+                if (thumbUri != null && fullUri != null && !java.util.Objects.equals(thumbUri, fullUri)) {
                     bindFrescoImage(ViewHolder.this, sticker, fullUri, fullUri, decodeSize);
                 } else {
                     draweeView.setVisibility(View.GONE);

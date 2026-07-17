@@ -22,8 +22,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.util.ArrayList;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -47,7 +48,7 @@ public class WastickerParser {
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             String seededPath = prefs.getString(KEY_BUNDLED_SEEDED_PATH, null);
 
-            if (rootPath.equals(seededPath)) {
+            if (Objects.equals(rootPath, seededPath)) {
                 return;
             }
 
@@ -65,7 +66,9 @@ public class WastickerParser {
     private static void seedBundledToInternalIfNeeded(Context context, String rootPath) throws IOException, IllegalStateException {
         File rootDir = new File(rootPath);
         if (!rootDir.exists()) {
-            rootDir.mkdirs();
+            if (!rootDir.mkdirs()) {
+                Log.w(TAG, "Failed to create root dir: " + rootPath);
+            }
         }
 
         File contentsFile = new File(rootDir, CONTENTS_FILE_NAME);
@@ -83,7 +86,9 @@ public class WastickerParser {
         for (StickerPack pack : bundledPacks) {
             File packDir = new File(rootDir, pack.identifier);
             if (!packDir.exists()) {
-                packDir.mkdirs();
+                if (!packDir.mkdirs()) {
+                    Log.w(TAG, "Failed to create pack dir: " + pack.identifier);
+                }
             }
 
             if (pack.trayImageFile != null && !pack.trayImageFile.isEmpty()) {
@@ -123,10 +128,8 @@ public class WastickerParser {
         }
 
         for (StickerPack pack : bundledPacks) {
-            DocumentFile packDir = root.findFile(pack.identifier);
-            if (packDir == null) {
-                packDir = root.createDirectory(pack.identifier);
-            }
+            DocumentFile foundDir = root.findFile(pack.identifier);
+            DocumentFile packDir = (foundDir != null) ? foundDir : root.createDirectory(pack.identifier);
             if (packDir == null) {
                 continue;
             }
@@ -162,7 +165,9 @@ public class WastickerParser {
         }
         File parent = destFile.getParentFile();
         if (parent != null && !parent.exists()) {
-            parent.mkdirs();
+            if (!parent.mkdirs()) {
+                Log.w(TAG, "Failed to create parent dir for: " + destFile.getName());
+            }
         }
         try (InputStream is = assetManager.open(assetPath);
              OutputStream os = new FileOutputStream(destFile)) {
@@ -214,7 +219,9 @@ public class WastickerParser {
             // Also clean up any legacy flat thumb_ files from older versions
             for (DocumentFile file : packDir.listFiles()) {
                 if (file.getName() != null && file.getName().startsWith("thumb_")) {
-                    file.delete();
+                    if (!file.delete()) {
+                        Log.w(TAG, "Failed to delete SAF thumb file: " + file.getName());
+                    }
                 }
             }
         } else {
@@ -227,7 +234,11 @@ public class WastickerParser {
             File[] files = packDir.listFiles();
             if (files != null) {
                 for (File f : files) {
-                    if (f.getName().startsWith("thumb_")) f.delete();
+                    if (f.getName().startsWith("thumb_")) {
+                        if (!f.delete()) {
+                            Log.w(TAG, "Failed to delete legacy internal thumb file: " + f.getName());
+                        }
+                    }
                 }
             }
         }
@@ -659,7 +670,7 @@ public class WastickerParser {
             if (contents == null) contents = rootDoc.createFile("application/json", "contents.json");
             if (contents == null) throw new IOException("Could not create contents.json");
             try (OutputStream os = context.getContentResolver().openOutputStream(contents.getUri())) {
-                os.write(content.getBytes("UTF-8"));
+                os.write(content.getBytes(StandardCharsets.UTF_8));
             }
         } else {
             File masterContentsFile = new File(rootPath, "contents.json");
@@ -695,7 +706,7 @@ public class WastickerParser {
 
     public static boolean isCustomPathUri(Context context) {
         String path = getStickerFolderPath(context);
-        return path != null && path.startsWith("content://");
+        return path.startsWith("content://");
     }
 
     public static void setStickerFolderPath(Context context, String path) {

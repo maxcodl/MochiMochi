@@ -10,10 +10,7 @@ import android.os.Looper;
 import android.text.format.Formatter;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -29,7 +26,6 @@ import androidx.appcompat.widget.Toolbar;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.switchmaterial.SwitchMaterial;
-import com.kawai.mochi.R;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -50,7 +46,6 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
     private static final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private MaterialButton regenerateButton;
-    private AlertDialog progressDialog;
     private String originalButtonText;
 
     @Override
@@ -79,38 +74,38 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         regenerateButton = findViewById(R.id.regenerate_thumbnails_button);
         if (regenerateButton != null) {
             originalButtonText = regenerateButton.getText().toString();
-        regenerateButton.setOnClickListener(v -> {
-            // Inflate the custom dialog layout
-            View dialogView = LayoutInflater.from(SettingsActivity.this)
-                    .inflate(R.layout.dialog_thumb_regeneration, null);
+            regenerateButton.setOnClickListener(v -> {
+                // Inflate the custom dialog layout
+                View dialogView = LayoutInflater.from(SettingsActivity.this)
+                        .inflate(R.layout.dialog_thumb_regeneration, null);
 
-            AlertDialog dialog = new MaterialAlertDialogBuilder(SettingsActivity.this)
-                    .setTitle(R.string.regenerate_thumbnails)
-                    .setView(dialogView)
-                    .create();
+                AlertDialog dialog = new MaterialAlertDialogBuilder(SettingsActivity.this)
+                        .setTitle(R.string.regenerate_thumbnails)
+                        .setView(dialogView)
+                        .create();
 
-            MaterialButton btnContinue = dialogView.findViewById(R.id.btn_continue);
-            MaterialButton btnReset = dialogView.findViewById(R.id.btn_reset);
-            MaterialButton btnCancel = dialogView.findViewById(R.id.btn_cancel);
+                MaterialButton btnContinue = dialogView.findViewById(R.id.btn_continue);
+                MaterialButton btnReset = dialogView.findViewById(R.id.btn_reset);
+                MaterialButton btnCancel = dialogView.findViewById(R.id.btn_cancel);
 
-            btnContinue.setOnClickListener(view -> {
-                dialog.dismiss();
-                ThumbnailRegenerationManager.regenerateMissing(SettingsActivity.this);
-                regenerateButton.setEnabled(false);
-                regenerateButton.setText(R.string.regenerating_missing);
+                btnContinue.setOnClickListener(view -> {
+                    dialog.dismiss();
+                    ThumbnailRegenerationManager.regenerateMissing(SettingsActivity.this);
+                    regenerateButton.setEnabled(false);
+                    regenerateButton.setText(R.string.regenerating_missing);
+                });
+
+                btnReset.setOnClickListener(view -> {
+                    dialog.dismiss();
+                    ThumbnailRegenerationManager.start(SettingsActivity.this);
+                    regenerateButton.setEnabled(false);
+                    regenerateButton.setText(R.string.regenerating_start);
+                });
+
+                btnCancel.setOnClickListener(view -> dialog.dismiss());
+
+                dialog.show();
             });
-
-            btnReset.setOnClickListener(view -> {
-                dialog.dismiss();
-                ThumbnailRegenerationManager.start(SettingsActivity.this);
-                regenerateButton.setEnabled(false);
-                regenerateButton.setText(R.string.regenerating_start);
-            });
-
-            btnCancel.setOnClickListener(view -> dialog.dismiss());
-
-            dialog.show();
-        });
         }
 
         folderPickerLauncher = registerForActivityResult(
@@ -146,19 +141,30 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         
         if (isAmoled) themeRadioGroup.check(R.id.theme_amoled);
         else {
-            switch (themeMode) {
-                case AppCompatDelegate.MODE_NIGHT_NO: themeRadioGroup.check(R.id.theme_light); break;
-                case AppCompatDelegate.MODE_NIGHT_YES: themeRadioGroup.check(R.id.theme_dark); break;
-                default: themeRadioGroup.check(R.id.theme_system); break;
-            }
+            int checkedId = switch (themeMode) {
+                case AppCompatDelegate.MODE_NIGHT_NO -> R.id.theme_light;
+                case AppCompatDelegate.MODE_NIGHT_YES -> R.id.theme_dark;
+                default -> R.id.theme_system;
+            };
+            themeRadioGroup.check(checkedId);
         }
 
         themeRadioGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            int mode; boolean setAmoled = false;
-            if (checkedId == R.id.theme_light) mode = AppCompatDelegate.MODE_NIGHT_NO;
-            else if (checkedId == R.id.theme_dark) mode = AppCompatDelegate.MODE_NIGHT_YES;
-            else if (checkedId == R.id.theme_amoled) { mode = AppCompatDelegate.MODE_NIGHT_YES; setAmoled = true; }
-            else mode = AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
+            int mode;
+            final boolean setAmoled;
+            if (checkedId == R.id.theme_light) {
+                mode = AppCompatDelegate.MODE_NIGHT_NO;
+                setAmoled = false;
+            } else if (checkedId == R.id.theme_dark) {
+                mode = AppCompatDelegate.MODE_NIGHT_YES;
+                setAmoled = false;
+            } else if (checkedId == R.id.theme_amoled) {
+                mode = AppCompatDelegate.MODE_NIGHT_YES;
+                setAmoled = true;
+            } else {
+                mode = AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM;
+                setAmoled = false;
+            }
             
             prefs.edit().putInt(KEY_THEME, mode).putBoolean("theme_amoled", setAmoled).apply();
             AppCompatDelegate.setDefaultNightMode(mode);
@@ -184,9 +190,7 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
 
         Button viewConversionsButton = findViewById(R.id.view_conversions_button);
         if (viewConversionsButton != null) {
-            viewConversionsButton.setOnClickListener(v -> {
-                startActivity(new Intent(this, ConversionTasksActivity.class));
-            });
+            viewConversionsButton.setOnClickListener(v -> startActivity(new Intent(this, ConversionTasksActivity.class)));
         }
 
         runDiagnosticsButton.setOnClickListener(v -> showPackSelectorForDiagnostics());
@@ -208,44 +212,6 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         super.onDestroy();
     }
 
-    private void startRegeneration() {
-        if (ThumbnailRegenerationManager.isRegenerating()) return;
-
-        showProgressDialog();
-        ThumbnailRegenerationManager.start(this);
-    }
-
-    private void showProgressDialog() {
-        if (progressDialog != null && progressDialog.isShowing()) return;
-
-        progressDialog = new MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.regenerating_thumbnails_title)
-                .setView(R.layout.dialog_progress)
-                .setCancelable(true)
-                .setNegativeButton(R.string.hide, (d, which) -> d.dismiss())
-                .create();
-        progressDialog.show();
-        
-        // Initial state sync
-        if (ThumbnailRegenerationManager.isRegenerating()) {
-            int[] progress = ThumbnailRegenerationManager.getProgress();
-            updateDialogProgress(progress[0], progress[1]);
-        }
-    }
-
-    private void updateDialogProgress(int current, int total) {
-        if (progressDialog == null || !progressDialog.isShowing()) return;
-        ProgressBar progressBar = progressDialog.findViewById(R.id.progress_bar);
-        TextView statusText = progressDialog.findViewById(R.id.progress_text);
-        if (progressBar != null) {
-            progressBar.setMax(total);
-            progressBar.setProgress(current);
-        }
-        if (statusText != null) {
-            statusText.setText(getString(R.string.progress_format, current, total));
-        }
-    }
-
     @Override
     public void onProgress(int current, int total) {
         runOnUiThread(() -> {
@@ -254,7 +220,6 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
                 regenerateButton.setEnabled(false);
                 regenerateButton.setText(getString(R.string.regenerating_percent, percent));
             }
-            updateDialogProgress(current, total);
         });
     }
 
@@ -264,9 +229,6 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
             if (regenerateButton != null) {
                 regenerateButton.setEnabled(true);
                 regenerateButton.setText(originalButtonText);
-            }
-            if (progressDialog != null && progressDialog.isShowing()) {
-                progressDialog.dismiss();
             }
             Toast.makeText(this, R.string.thumbnails_regenerated, Toast.LENGTH_SHORT).show();
         });
@@ -278,9 +240,6 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
             if (regenerateButton != null) {
                 regenerateButton.setEnabled(true);
                 regenerateButton.setText(originalButtonText);
-            }
-            if (progressDialog != null && progressDialog.isShowing()) {
-                progressDialog.dismiss();
             }
             Toast.makeText(this, getString(R.string.error_with_message, message), Toast.LENGTH_LONG).show();
         });
@@ -330,10 +289,9 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         String root = WastickerParser.getStickerFolderPath(this);
         boolean isSAF = WastickerParser.isCustomPathUri(this);
 
-        androidx.documentfile.provider.DocumentFile safRoot = null;
         java.util.Map<String, androidx.documentfile.provider.DocumentFile> safPackDirs = new java.util.HashMap<>();
         if (isSAF) {
-            safRoot = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, Uri.parse(root));
+            androidx.documentfile.provider.DocumentFile safRoot = androidx.documentfile.provider.DocumentFile.fromTreeUri(this, Uri.parse(root));
             if (safRoot != null) {
                 for (androidx.documentfile.provider.DocumentFile child : safRoot.listFiles()) {
                     if (child.isDirectory() && child.getName() != null) {
@@ -414,7 +372,7 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.diagnostics_results_title)
                 .setView(v)
-                .setPositiveButton(R.string.repair_process_title, (d, which) -> startRepairProcess(packs))
+                .setPositiveButton(R.string.repair_process_title, (d, which) -> startRepairProcess())
                 .setNegativeButton(R.string.cancel, null)
                 .setNeutralButton(R.string.copy_label, null)
                 .show();
@@ -426,7 +384,7 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         });
     }
 
-    private void startRepairProcess(ArrayList<StickerPack> packs) {
+    private void startRepairProcess() {
         View v = LayoutInflater.from(this).inflate(R.layout.dialog_diagnostics, null);
         TextView logText = v.findViewById(R.id.diagnostics_report_text);
         logText.setText(R.string.repair_engine_init);
@@ -443,7 +401,6 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         done.setEnabled(false);
 
         taskExecutor.execute(() -> {
-            int fixedCount = 0;
             // ... (keeping original repair logic structure)
             postLog(logText, sv, "\n=== Processing Complete ===");
             mainHandler.post(() -> {
@@ -469,7 +426,8 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
 
     private void updateBotTokenButtonState(Button button) {
         if (BotTokenManager.isBotTokenSet(this)) {
-            button.setText(getString(R.string.telegram_bot_token_configured) + "\n" + BotTokenManager.getMaskedToken(this));
+            String label = getString(R.string.telegram_bot_token_configured) + "\n" + BotTokenManager.getMaskedToken(this);
+            button.setText(label);
         } else {
             button.setText(R.string.telegram_bot_token_not_configured);
         }

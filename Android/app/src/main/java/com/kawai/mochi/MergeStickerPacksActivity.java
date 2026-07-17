@@ -1,6 +1,7 @@
 package com.kawai.mochi;
 
 import android.content.Context;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -12,6 +13,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.appcompat.widget.Toolbar;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -209,6 +211,7 @@ public class MergeStickerPacksActivity extends BaseActivity {
                 .show();
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.N)
     private void executeMerge(List<Integer> indices) {
         List<StickerPack> packsToMerge = new ArrayList<>();
         for (int i : indices) packsToMerge.add(allPacks.get(i));

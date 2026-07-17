@@ -91,7 +91,6 @@ public class StickerContentProvider extends ContentProvider {
 
     private List<StickerPack> stickerPackList;
     private Map<String, StickerPack> stickerPackMap = new LinkedHashMap<>();
-    private static final String TAG = "StickerContentProvider";
 
     private static StickerContentProvider instance;
 
@@ -127,10 +126,12 @@ public class StickerContentProvider extends ContentProvider {
     public Cursor query(@NonNull Uri uri, @Nullable String[] projection, String selection,
                         String[] selectionArgs, String sortOrder) {
         final int code = MATCHER.match(uri);
-        if (code == METADATA_CODE) return getPackForAllStickerPacks(uri);
-        else if (code == METADATA_CODE_FOR_SINGLE_PACK) return getCursorForSingleStickerPack(uri);
-        else if (code == STICKERS_CODE) return getStickersForAStickerPack(uri);
-        else throw new IllegalArgumentException("Unknown URI: " + uri);
+        return switch (code) {
+            case METADATA_CODE -> getPackForAllStickerPacks(uri);
+            case METADATA_CODE_FOR_SINGLE_PACK -> getCursorForSingleStickerPack(uri);
+            case STICKERS_CODE -> getStickersForAStickerPack(uri);
+            default -> throw new IllegalArgumentException("Unknown URI: " + uri);
+        };
     }
 
     @Nullable
@@ -146,14 +147,13 @@ public class StickerContentProvider extends ContentProvider {
     @Override
     public String getType(@NonNull Uri uri) {
         final int matchCode = MATCHER.match(uri);
-        switch (matchCode) {
-            case METADATA_CODE: return "vnd.android.cursor.dir/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + METADATA;
-            case METADATA_CODE_FOR_SINGLE_PACK: return "vnd.android.cursor.item/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + METADATA;
-            case STICKERS_CODE: return "vnd.android.cursor.dir/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + STICKERS;
-            case STICKERS_ASSET_CODE:
-            case STICKER_PACK_TRAY_ICON_CODE: return getMimeType(uri);
-            default: throw new IllegalArgumentException("Unknown URI: " + uri);
-        }
+        return switch (matchCode) {
+            case METADATA_CODE -> "vnd.android.cursor.dir/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + METADATA;
+            case METADATA_CODE_FOR_SINGLE_PACK -> "vnd.android.cursor.item/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + METADATA;
+            case STICKERS_CODE -> "vnd.android.cursor.dir/vnd." + BuildConfig.CONTENT_PROVIDER_AUTHORITY + "." + STICKERS;
+            case STICKERS_ASSET_CODE, STICKER_PACK_TRAY_ICON_CODE -> getMimeType(uri);
+            default -> throw new IllegalArgumentException("Unknown URI: " + uri);
+        };
     }
 
     private String getMimeType(Uri uri) {
@@ -180,7 +180,9 @@ public class StickerContentProvider extends ContentProvider {
                 DocumentFile contents = root.findFile(CONTENT_FILE_NAME);
                 if (contents != null) {
                     try (InputStream is = context.getContentResolver().openInputStream(contents.getUri())) {
-                        loadedPacks = ContentFileParser.parseStickerPacks(is);
+                        if (is != null) {
+                            loadedPacks = ContentFileParser.parseStickerPacks(is);
+                        }
                     } catch (Exception e) { Log.w("StickerCP", "Failed to read SAF contents.json", e); }
                 }
             }
@@ -240,7 +242,7 @@ public class StickerContentProvider extends ContentProvider {
      */
     private DocumentFile getSafRoot(@NonNull Context context, @NonNull String folderPath) {
         synchronized (safCacheLock) {
-            if (safCachedRoot != null && folderPath.equals(safCachedRootPath)) {
+            if (safCachedRoot != null && Objects.equals(folderPath, safCachedRootPath)) {
                 return safCachedRoot;
             }
             safCachedRoot = DocumentFile.fromTreeUri(context, Uri.parse(folderPath));
@@ -417,7 +419,7 @@ public class StickerContentProvider extends ContentProvider {
             if (callingPackage == null) {
                 return true;
             }
-            return callingPackage.equals(context.getPackageName());
+            return Objects.equals(callingPackage, context.getPackageName());
         } catch (Exception e) {
             return true;
         }
@@ -452,7 +454,7 @@ public class StickerContentProvider extends ContentProvider {
                 if (originalPack != null) {
                     List<StickerPack> chunks = StickerPackChunkManager.splitIntoChunks(originalPack);
                     for (StickerPack chunk : chunks) {
-                        if (identifier.equals(chunk.identifier)) {
+                        if (Objects.equals(identifier, chunk.identifier)) {
                             return chunk;
                         }
                     }
@@ -522,17 +524,19 @@ public class StickerContentProvider extends ContentProvider {
 
         final String identifier = pathSegments.get(baseIndex + 1);
         StringBuilder fileBuilder = new StringBuilder();
-        for (int i = baseIndex + 2; i < pathSegments.size(); i++) {
+        int i = baseIndex + 2;
+        while (i < pathSegments.size()) {
             if (i > baseIndex + 2) {
                 fileBuilder.append('/');
             }
             fileBuilder.append(pathSegments.get(i));
+            i++;
         }
         String fileName = fileBuilder.toString();
 
         StickerPack stickerPack = getStickerPackByIdentifier(identifier);
         if (stickerPack != null) {
-            if (fileName.equals(stickerPack.trayImageFile)) return fetchFile(uri, fileName, identifier);
+            if (Objects.equals(fileName, stickerPack.trayImageFile)) return fetchFile(fileName, identifier);
 
             // Thumbnail requests come in as "thumbnails/thumb_<original>"
             boolean isThumb = fileName.startsWith("thumbnails/thumb_");
@@ -547,17 +551,17 @@ public class StickerContentProvider extends ContentProvider {
             }
 
             for (Sticker sticker : stickerPack.getStickers()) {
-                if (originalFileName.equals(sticker.imageFileName)) {
+                if (Objects.equals(originalFileName, sticker.imageFileName)) {
                     if (isThumb) {
                         try {
-                            AssetFileDescriptor afd = fetchFile(uri, fileName, identifier);
+                            AssetFileDescriptor afd = fetchFile(fileName, identifier);
                             if (afd != null) return afd;
                         } catch (FileNotFoundException ignored) {}
                         // Do not fall back to original for thumbnail requests.
                         // This prevents high-res files from being served when list previews request thumbs.
                         throw new FileNotFoundException("Missing thumbnail: " + identifier + "/" + fileName);
                     } else {
-                        return fetchFile(uri, fileName, identifier);
+                        return fetchFile(fileName, identifier);
                     }
                 }
             }
@@ -566,13 +570,13 @@ public class StickerContentProvider extends ContentProvider {
         // Best-effort fallback: if metadata is stale (e.g., chunk just added),
         // try to serve the asset directly from storage.
         try {
-            return fetchFile(uri, fileName, identifier);
+            return fetchFile(fileName, identifier);
         } catch (FileNotFoundException ignored) {
             return null;
         }
     }
 
-    private AssetFileDescriptor fetchFile(@NonNull Uri uri, @NonNull String fileName, @NonNull String identifier) throws FileNotFoundException {
+    private AssetFileDescriptor fetchFile(@NonNull String fileName, @NonNull String identifier) throws FileNotFoundException {
         Context context = getContext(); if (context == null) return null;
         String folderPath = WastickerParser.getStickerFolderPath(context);
 
@@ -614,7 +618,11 @@ public class StickerContentProvider extends ContentProvider {
                     }
                     if (file != null) {
                         File parent = mirror.getParentFile();
-                        if (parent != null && !parent.exists()) parent.mkdirs();
+                        if (parent != null && !parent.exists()) {
+                            if (!parent.mkdirs()) {
+                                Log.w("StickerCP", "Failed to create mirror dir: " + parent.getAbsolutePath());
+                            }
+                        }
                         try (InputStream is = context.getContentResolver().openInputStream(file.getUri());
                              OutputStream os = new FileOutputStream(mirror)) {
                             if (is != null) {
@@ -666,8 +674,7 @@ public class StickerContentProvider extends ContentProvider {
         }
 
         try {
-            AssetFileDescriptor afd = context.getAssets().openFd(resolvedIdentifier + "/" + fileName);
-            return afd;
+            return context.getAssets().openFd(resolvedIdentifier + "/" + fileName);
         } catch (IOException ignored) {
             // If it's not in assets and not in the user folder, it truly doesn't exist
             throw new FileNotFoundException(resolvedIdentifier + "/" + fileName);
@@ -682,7 +689,7 @@ public class StickerContentProvider extends ContentProvider {
     private AssetFileDescriptor tryFetchChunkTrayFallback(@NonNull Context context, @NonNull String folderPath,
                                                          @NonNull String identifier, @NonNull String fileName) {
         if (!isChunkIdentifier(identifier)) return null;
-        if (!fileName.equals(getTrayFileNameForIdentifier(identifier))) return null;
+        if (!Objects.equals(fileName, getTrayFileNameForIdentifier(identifier))) return null;
 
         String originalId = getOriginalIdentifier(identifier);
         if (originalId == null) return null;
@@ -700,7 +707,7 @@ public class StickerContentProvider extends ContentProvider {
     private AssetFileDescriptor tryFetchChunkTrayFallback(@NonNull String folderPath,
                                                          @NonNull String identifier, @NonNull String fileName) {
         if (!isChunkIdentifier(identifier)) return null;
-        if (!fileName.equals(getTrayFileNameForIdentifier(identifier))) return null;
+        if (!Objects.equals(fileName, getTrayFileNameForIdentifier(identifier))) return null;
 
         String originalId = getOriginalIdentifier(identifier);
         if (originalId == null) return null;

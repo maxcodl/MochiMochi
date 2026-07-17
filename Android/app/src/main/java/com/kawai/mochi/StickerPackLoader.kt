@@ -6,7 +6,6 @@ import android.net.Uri
 import android.text.TextUtils
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
-import com.kawai.mochi.BuildConfig
 import kotlinx.coroutines.*
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -50,7 +49,7 @@ object StickerPackLoader {
         // Pre-fetch directory map for SAF to avoid repeated lookups
         val packDirsMap = if (isSAF) {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(rootPath))
-            root?.listFiles()?.filter { it.isDirectory }?.associateBy { it.name }
+            root?.listFiles()?.asSequence()?.filter { it.isDirectory }?.associateBy { it.name }
         } else null
 
         // Parallelize fetching stickers and sizes
@@ -60,7 +59,7 @@ object StickerPackLoader {
                     val stickers = fetchFromContentProviderForStickers(stickerPack.identifier, context.contentResolver)
                     // Re-introduced size population with optimizations
                     populateStickerSizes(context, stickerPack.identifier, stickers, stickerPack.animatedStickerPack, packDirsMap?.get(stickerPack.identifier))
-                    stickerPack.setStickers(stickers)
+                    stickerPack.stickers = stickers
                     stickers.forEach { it.isAnimated = stickerPack.animatedStickerPack }
                 } catch (e: Exception) {
                     Log.w(TAG, "Skipping invalid pack '${stickerPack.name}': ${e.message}")
@@ -84,7 +83,7 @@ object StickerPackLoader {
             return@withContext try {
                 val stickers = fetchFromContentProviderForStickers(pack.identifier, context.contentResolver)
                 populateStickerSizes(context, pack.identifier, stickers, pack.animatedStickerPack)
-                pack.setStickers(stickers)
+                pack.stickers = stickers
                 pack
             } catch (e: Exception) {
                 Log.w(TAG, "Skipping invalid imported pack '$identifier': ${e.message}")
@@ -116,7 +115,7 @@ object StickerPackLoader {
             val sizeMap = HashMap<String, Long>()
             for (file in packDir.listFiles()) {
                 val name = file.name
-                if (name != null && !file.isDirectory) sizeMap[name] = file.length()
+                if (name != null && !file.isDirectory()) sizeMap[name] = file.length()
             }
             stickers.forEach { sticker ->
                 sticker.setSize(sizeMap[sticker.imageFileName] ?: 0L)
@@ -159,7 +158,7 @@ object StickerPackLoader {
         val projection = arrayOf(
             StickerContentProvider.STICKER_FILE_NAME_IN_QUERY,
             StickerContentProvider.STICKER_FILE_EMOJI_IN_QUERY,
-            StickerContentProvider.STICKER_FILE_ACCESSIBILITY_TEXT_IN_QUERY
+            StickerContentProvider.STICKER_FILE_ACCESSIBILITY_TEXT_IN_QUERY,
         )
         val cursor = contentResolver.query(uri, projection, null, null, null)
         val stickers = mutableListOf<Sticker>()
@@ -202,7 +201,7 @@ object StickerPackLoader {
         val uri = getStickerAssetUri(identifier, name)
         return try {
             contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: 0L
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             0L
         }
     }

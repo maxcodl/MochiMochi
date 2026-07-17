@@ -1,6 +1,5 @@
 package com.kawai.mochi
 
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.Configuration
@@ -10,8 +9,6 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
-import com.kawai.mochi.BuildConfig
-import com.kawai.mochi.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -43,7 +40,7 @@ abstract class AddStickerPackActivity : BaseActivity() {
 
     private val addStickerLauncher: ActivityResultLauncher<Intent> =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_CANCELED) {
+            if (result.resultCode == RESULT_CANCELED) {
                 val validationError = result.data?.getStringExtra("validation_error")
                 if (validationError != null) {
                     Log.e(TAG, "WhatsApp validation failed: $validationError")
@@ -175,7 +172,7 @@ abstract class AddStickerPackActivity : BaseActivity() {
             try {
                 // Find the original pack to source sticker files from.
                 val originalId = chunkSourceIdentifier ?: return@launch
-                val originalPack = withContext(Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     StickerPackLoader.fetchStickerPack(this@AddStickerPackActivity, originalId)
                 } ?: run {
                     hideProgressBar()
@@ -283,7 +280,7 @@ abstract class AddStickerPackActivity : BaseActivity() {
         intent.setPackage(whatsappPackageName)
         try {
             addStickerLauncher.launch(intent)
-        } catch (e: ActivityNotFoundException) {
+        } catch (_: ActivityNotFoundException) {
             Toast.makeText(this, R.string.whatsapp_not_installed, Toast.LENGTH_SHORT).show()
         }
     }

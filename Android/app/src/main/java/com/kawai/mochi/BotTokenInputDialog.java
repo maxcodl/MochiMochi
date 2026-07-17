@@ -1,13 +1,10 @@
 package com.kawai.mochi;
 
 import android.content.Context;
-import android.content.DialogInterface;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-
-import androidx.appcompat.app.AlertDialog;
-
+import androidx.core.content.ContextCompat;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 /**
@@ -41,7 +38,7 @@ public class BotTokenInputDialog {
         TextView titleView = new TextView(context);
         titleView.setText(R.string.telegram_bot_token_title);
         titleView.setTextSize(16);
-        titleView.setTextColor(context.getResources().getColor(android.R.color.black, context.getTheme()));
+        titleView.setTextColor(ContextCompat.getColor(context, android.R.color.black));
         layout.addView(titleView);
 
         // Subtitle
@@ -49,7 +46,7 @@ public class BotTokenInputDialog {
             TextView subtitleView = new TextView(context);
             subtitleView.setText(subtitleMessage);
             subtitleView.setTextSize(12);
-            subtitleView.setTextColor(context.getResources().getColor(android.R.color.darker_gray, context.getTheme()));
+            subtitleView.setTextColor(ContextCompat.getColor(context, android.R.color.darker_gray));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -63,7 +60,7 @@ public class BotTokenInputDialog {
         TextView descriptionView = new TextView(context);
         descriptionView.setText(R.string.telegram_bot_token_description);
         descriptionView.setTextSize(12);
-        descriptionView.setTextColor(context.getResources().getColor(android.R.color.darker_gray, context.getTheme()));
+        descriptionView.setTextColor(ContextCompat.getColor(context, android.R.color.darker_gray));
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -84,7 +81,7 @@ public class BotTokenInputDialog {
         tokenInput.setLayoutParams(inputParams);
         layout.addView(tokenInput);
 
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(context)
+        new MaterialAlertDialogBuilder(context)
                 .setView(layout)
                 .setPositiveButton(R.string.save_button, (dialog, which) -> {
                     String token = tokenInput.getText().toString().trim();
@@ -98,11 +95,10 @@ public class BotTokenInputDialog {
                 .setNegativeButton(R.string.cancel, (dialog, which) -> {
                     if (listener != null) listener.onTokenInputCancelled();
                     dialog.dismiss();
-                });
-
-        AlertDialog dialog = builder.show();
+                })
+                .show();
         
-        // Auto-focus the input field
+        // Autofocus the input field
         tokenInput.requestFocus();
     }
 

@@ -31,7 +31,6 @@ import com.facebook.imagepipeline.image.ImageInfo;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
-import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
 
@@ -73,7 +72,6 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
     private TextView expandedStickerName;
     private TextView expandedStickerEmojis;
     private TextView expandedStickerSize;
-    private MaterialButton editEmojiButton;
     private MaterialButton deleteStickerButton;
     private boolean expandedPreviewVisible;
     private volatile boolean whitelistCheckCancelled;
@@ -152,7 +150,6 @@ public class StickerPackDetailsActivity extends AddStickerPackActivity {
         expandedStickerName = findViewById(R.id.expanded_sticker_name);
         expandedStickerEmojis = findViewById(R.id.expanded_sticker_emojis);
         expandedStickerSize = findViewById(R.id.expanded_sticker_size);
-        editEmojiButton = findViewById(R.id.edit_emoji_button);
         deleteStickerButton = findViewById(R.id.delete_sticker_button);
 
         setupExpandedPreview();

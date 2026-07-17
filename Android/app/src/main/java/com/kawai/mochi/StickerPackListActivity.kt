@@ -14,7 +14,6 @@ import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.Toolbar
-import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -25,13 +24,11 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
-import com.kawai.mochi.R
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.Pair
+import kotlin.math.roundToInt
 
 
 class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationManager.Listener {
@@ -43,7 +40,6 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
     private lateinit var importFab: ExtendedFloatingActionButton
     private lateinit var filePickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var swipeRefresh: SwipeRefreshLayout
-    private var migrationJob: Job? = null
     private lateinit var itemTouchHelper: ItemTouchHelper
     
     private var importProgressContainer: View? = null
@@ -54,7 +50,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            refreshStickerPacks(true) // Silent refresh
+            refreshStickerPacks()
         }
     }
 
@@ -74,14 +70,14 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         ActivityResultContracts.StartActivityForResult()
     ) { 
         allStickerPacksListAdapter.invalidateAnimationsCache()
-        refreshStickerPacks(true) // Silent refresh: Fix for unwanted refresh animation
+        refreshStickerPacks()
     }
 
     private val mergePacksLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            refreshStickerPacks(true) // Silent refresh
+            refreshStickerPacks()
         }
     }
 
@@ -148,7 +144,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         importFab.setOnClickListener { showImportChoice() }
 
         swipeRefresh.setOnRefreshListener {
-            refreshStickerPacks(true)
+            refreshStickerPacks()
         }
 
         itemTouchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT) {
@@ -181,7 +177,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 StickerUpdateManager.updateEvent.collect {
-                    refreshStickerPacks(true)
+                    refreshStickerPacks()
                 }
             }
         }
@@ -209,7 +205,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
     override fun onFinished() {
         runOnUiThread {
             importProgressContainer?.visibility = View.GONE
-            refreshStickerPacks(true)
+            refreshStickerPacks()
         }
     }
 
@@ -220,8 +216,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         }
     }
 
-    private fun refreshStickerPacks(fromSwipe: Boolean = false) {
-        if (!fromSwipe) swipeRefresh.isRefreshing = true
+    private fun refreshStickerPacks() {
         lifecycleScope.launch {
             try {
                 val freshPacks = withContext(Dispatchers.IO) {
@@ -308,13 +303,12 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
                     val existingIndex = stickerPackList.indexOfFirst { it.identifier == importedId }
                     if (existingIndex >= 0) {
                         stickerPackList[existingIndex] = importedPack
-                        allStickerPacksListAdapter.notifyItemChanged(existingIndex)
                     } else {
                         stickerPackList.add(importedPack)
-                        allStickerPacksListAdapter.notifyItemInserted(stickerPackList.size - 1)
                     }
+                    allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
                 } else {
-                    refreshStickerPacks(true)
+                    refreshStickerPacks()
                 }
 
                 updateEmptyState()
@@ -395,12 +389,9 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
 
     override fun onResume() {
         super.onResume()
-        refreshStickerPacks(fromSwipe = true)
+        refreshStickerPacks()
         if (::allStickerPacksListAdapter.isInitialized) {
             allStickerPacksListAdapter.invalidateAnimationsCache()
-            if (stickerPackList.isNotEmpty()) {
-                allStickerPacksListAdapter.notifyDataSetChanged()
-            }
         }
     }
 
@@ -431,23 +422,21 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
 
         val density = resources.displayMetrics.density
         // Correct overhead: Card margins (12+12) + RV start (16) + RV to button (16) + button (48) + button end (16)
-        val overhead = Math.round((12 + 12 + 16 + 16 + 48 + 16) * density)
+        val overhead = ((12 + 12 + 16 + 16 + 48 + 16) * density).roundToInt()
         val imageRowWidth = rvWidth - overhead
         if (imageRowWidth <= 0) return
 
         val maxNumberOfImagesInARow = STICKER_PREVIEW_DISPLAY_LIMIT
         
         // Aim for a small fixed margin between stickers
-        val desiredMargin = Math.round(4 * density)
+        val desiredMargin = (4 * density).roundToInt()
         val totalMargin = desiredMargin * (maxNumberOfImagesInARow - 1)
         
         // Calculate the preview size that allows exactly 5 stickers to fit
         val previewSize = (imageRowWidth - totalMargin) / maxNumberOfImagesInARow
         
         // Recalculate actual margin to distribute any rounding remainder
-        val actualMargin = if (maxNumberOfImagesInARow > 1) {
-            (imageRowWidth - maxNumberOfImagesInARow * previewSize) / (maxNumberOfImagesInARow - 1)
-        } else 0
+        val actualMargin = (imageRowWidth - maxNumberOfImagesInARow * previewSize) / (maxNumberOfImagesInARow - 1)
         
         allStickerPacksListAdapter.setImageRowSpec(maxNumberOfImagesInARow, actualMargin, previewSize)
         

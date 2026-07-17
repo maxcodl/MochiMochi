@@ -33,10 +33,6 @@
 	<!-- Text of button that allows user to click to go to the license agreement website -->
 	<string name="license_agreement">Licenčni ugovor</string>
 	<!-- Title of the sticker pack list activity page in case the app contains multiple sticker packs, the singular string will be used when there is only one pack in the app -->
-	<plurals name="title_activity_sticker_packs_list">
-		<item quantity="one">Paket naljepnica</item>
-		<item quantity="other">Paketa naljepnica</item>
-	</plurals>
 	<!-- Content description indicating the sticker pack is an animated pack -->
 	<string name="sticker_pack_animation_indicator">Paket animiranih naljepnica</string>
 	<!-- text we display at the end of sticker pack details page showing that users can tap sticker to see bigger version -->

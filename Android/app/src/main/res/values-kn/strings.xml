@@ -34,7 +34,6 @@
 	<string name="license_agreement">ಲೈಸೆನ್ಸ್ ಕರಾರು</string>
 	<!-- Title of the sticker pack list activity page in case the app contains multiple sticker packs, the singular string will be used when there is only one pack in the app -->
 	<plurals name="title_activity_sticker_packs_list">
-		<item quantity="one">ಸ್ಟಿಕರ್‌ ಪ್ಯಾಕ್‌</item>
 		<item quantity="other">ಸ್ಟಿಕರ್‌ ಪ್ಯಾಕ್‌ಗಳು</item>
 	</plurals>
 	<!-- Content description indicating the sticker pack is an animated pack -->

@@ -1,6 +1,4 @@
 package com.kawai.mochi;
-
-import android.app.ProgressDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -17,8 +15,9 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.textfield.TextInputEditText;
-import com.kawai.mochi.R;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -38,7 +37,6 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
     private TextInputEditText packNameEdit;
     private TextInputEditText authorEdit;
     private ImageView trayIconPreview;
-    private RecyclerView stickerGrid;
     private TextView stickerCountText;
     private EditStickerAdapter adapter;
     private List<EditStickerAdapter.StickerItem> stickerItems;
@@ -55,7 +53,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
         packNameEdit = findViewById(R.id.pack_name_edit);
         authorEdit = findViewById(R.id.author_edit);
         trayIconPreview = findViewById(R.id.tray_icon_preview);
-        stickerGrid = findViewById(R.id.sticker_grid);
+        RecyclerView stickerGrid = findViewById(R.id.sticker_grid);
         stickerCountText = findViewById(R.id.sticker_count_text);
         MaterialButton changeTrayIconButton = findViewById(R.id.change_tray_icon_button);
         MaterialButton addStickerButton = findViewById(R.id.add_sticker_button);
@@ -93,7 +91,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                             pack.identifier, sticker.imageFileName, sticker.emojis);
                     stickerItems.add(item);
                 }
-                adapter.notifyDataSetChanged();
+                adapter.notifyItemRangeInserted(0, stickerItems.size());
             }
         } else {
             isEditMode = false;
@@ -122,6 +120,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                 new ActivityResultContracts.StartActivityForResult(),
                 result -> {
                     if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                        int startPos = stickerItems.size();
                         // Handle multiple selection
                         if (result.getData().getClipData() != null) {
                             int count = result.getData().getClipData().getItemCount();
@@ -132,8 +131,12 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                         } else if (result.getData().getData() != null) {
                             addStickerFromUri(result.getData().getData());
                         }
-                        adapter.notifyDataSetChanged();
-                        updateStickerCount();
+                        
+                        int newCount = stickerItems.size() - startPos;
+                        if (newCount > 0) {
+                            adapter.notifyItemRangeInserted(startPos, newCount);
+                            updateStickerCount();
+                        }
                     }
                 });
 
@@ -168,10 +171,18 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
 
     private void savePack(String name, String author, String identifier,
                           List<EditStickerAdapter.StickerItem> items, Uri trayUri) {
-        ProgressDialog progressDialog = new ProgressDialog(this);
-        progressDialog.setMessage(getString(R.string.saving));
-        progressDialog.setCancelable(false);
+        LinearProgressIndicator progressBar = new LinearProgressIndicator(this);
+        progressBar.setIndeterminate(true);
+        int padding = (int) (24 * getResources().getDisplayMetrics().density);
+        progressBar.setPadding(padding, padding, padding, padding);
+
+        androidx.appcompat.app.AlertDialog progressDialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.saving)
+                .setView(progressBar)
+                .setCancelable(false)
+                .create();
         progressDialog.show();
+
         WeakReference<EditStickerPackActivity> ref = new WeakReference<>(this);
         final List<EditStickerAdapter.StickerItem> itemsCopy = new ArrayList<>(items);
         executor.execute(() -> {
@@ -196,7 +207,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                     
                     // TRIGGER THE APP-WIDE REFRESH HERE!
                     // This fires after the file is saved, but right before the screen closes
-                    StickerUpdateManager.INSTANCE.notifyStickersChanged();
+                    StickerUpdateManager.notifyStickersChanged();
                     
                     activity.setResult(201);
                     activity.finish();
@@ -264,7 +275,7 @@ public class EditStickerPackActivity extends BaseActivity implements EditSticker
                     }
                     if (newEmojis.isEmpty()) newEmojis.add("\uD83D\uDE00"); // fallback: 😀
                     item.emojis = newEmojis;
-                    adapter.notifyDataSetChanged();
+                    adapter.notifyItemChanged(position);
                 })
                 .setNegativeButton(android.R.string.cancel, null)
                 .show();

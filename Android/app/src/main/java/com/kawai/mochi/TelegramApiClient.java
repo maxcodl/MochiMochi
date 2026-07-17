@@ -1,7 +1,10 @@
 package com.kawai.mochi;
 
 import android.content.Context;
+import android.os.Build;
 import android.util.Log;
+
+import androidx.annotation.RequiresApi;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -109,6 +112,7 @@ public class TelegramApiClient {
         throw last != null ? last : new IOException("Request failed: " + urlStr);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.N)
     private byte[] getBytes(String urlStr) throws IOException {
         HttpURLConnection conn = openConnection(urlStr);
         try {

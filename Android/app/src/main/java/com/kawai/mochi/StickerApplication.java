@@ -5,6 +5,8 @@ import android.app.Application;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import androidx.annotation.NonNull;
+
 import com.facebook.common.internal.Supplier;
 import com.facebook.drawee.backends.pipeline.Fresco;
 import com.facebook.imagepipeline.cache.MemoryCacheParams;
@@ -36,19 +38,16 @@ public class StickerApplication extends Application {
         ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
                 .setDownsampleEnabled(true)
                 .setBitmapsConfig(android.graphics.Bitmap.Config.ARGB_8888)
-                .setBitmapMemoryCacheParamsSupplier(new Supplier<MemoryCacheParams>() {
-                    @Override
-                    public MemoryCacheParams get() {
-                        final int maxCacheSize = getMaxCacheSize(activityManager);
-                        return new MemoryCacheParams(
-                                maxCacheSize,
-                                1024,
-                                maxCacheSize / 4,
-                                Integer.MAX_VALUE,
-                                Integer.MAX_VALUE,
-                                java.util.concurrent.TimeUnit.MINUTES.toMillis(5)
-                        );
-                    }
+                .setBitmapMemoryCacheParamsSupplier(() -> {
+                    final int maxCacheSize = getMaxCacheSize(activityManager);
+                    return new MemoryCacheParams(
+                            maxCacheSize,
+                            1024,
+                            maxCacheSize / 4,
+                            Integer.MAX_VALUE,
+                            Integer.MAX_VALUE,
+                            java.util.concurrent.TimeUnit.MINUTES.toMillis(5)
+                    );
                 })
                 .setDiskCacheEnabled(true)
                 .setExecutorSupplier(new DefaultExecutorSupplier(Runtime.getRuntime().availableProcessors()))

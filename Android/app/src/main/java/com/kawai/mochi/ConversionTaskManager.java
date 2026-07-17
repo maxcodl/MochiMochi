@@ -2,6 +2,7 @@ package com.kawai.mochi;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -9,8 +10,8 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /** In-memory task store for Telegram conversions. */
@@ -23,23 +24,13 @@ public class ConversionTaskManager {
         FAILED
     }
 
-    public static class TaskPackResult {
-        public final String identifier;
-        public final String name;
-        public final int stickerCount;
-        public final boolean isAnimated;
-        /** Number of animated stickers skipped (not converted) for this result. */
-        public final int skippedAnimatedCount;
-
-        public TaskPackResult(String identifier, String name, int stickerCount,
-                              boolean isAnimated, int skippedAnimatedCount) {
-            this.identifier           = identifier;
-            this.name                 = name;
-            this.stickerCount         = stickerCount;
-            this.isAnimated           = isAnimated;
-            this.skippedAnimatedCount = skippedAnimatedCount;
-        }
-    }
+    public record TaskPackResult(
+            String identifier,
+            String name,
+            int stickerCount,
+            boolean isAnimated,
+            int skippedAnimatedCount
+    ) {}
 
     public static class TaskRecord {
         public final String taskId;
@@ -75,11 +66,11 @@ public class ConversionTaskManager {
             JSONArray resultsArr = new JSONArray();
             for (TaskPackResult res : results) {
                 JSONObject r = new JSONObject();
-                r.put("identifier", res.identifier);
-                r.put("name", res.name);
-                r.put("stickerCount", res.stickerCount);
-                r.put("isAnimated", res.isAnimated);
-                r.put("skippedAnimatedCount", res.skippedAnimatedCount);
+                r.put("identifier", res.identifier());
+                r.put("name", res.name());
+                r.put("stickerCount", res.stickerCount());
+                r.put("isAnimated", res.isAnimated());
+                r.put("skippedAnimatedCount", res.skippedAnimatedCount());
                 resultsArr.put(r);
             }
             obj.put("results", resultsArr);
@@ -98,7 +89,7 @@ public class ConversionTaskManager {
             t.status = Status.valueOf(obj.optString("status", Status.QUEUED.name()));
             t.done = obj.optInt("done", 0);
             t.total = obj.optInt("total", 0);
-            t.error = obj.isNull("error") ? null : obj.optString("error", null);
+            t.error = obj.isNull("error") ? null : obj.optString("error");
             JSONArray logsArr = obj.optJSONArray("logs");
             if (logsArr != null) {
                 for (int i = 0; i < logsArr.length(); i++) {
@@ -185,7 +176,7 @@ public class ConversionTaskManager {
                 tasks.add(TaskRecord.fromJson(arr.getJSONObject(i)));
             }
         } catch (JSONException e) {
-            e.printStackTrace();
+            Log.e("ConversionTaskManager", "Error loading from prefs", e);
         }
     }
 
@@ -196,7 +187,7 @@ public class ConversionTaskManager {
             try {
                 arr.put(t.toJson());
             } catch (JSONException e) {
-                e.printStackTrace();
+                Log.e("ConversionTaskManager", "Error converting task to JSON", e);
             }
         }
         SharedPreferences prefs = appContext.getSharedPreferences("telegram_conversion_tasks", Context.MODE_PRIVATE);
@@ -289,13 +280,13 @@ public class ConversionTaskManager {
     public synchronized List<TaskRecord> listTasks() {
         List<TaskRecord> copy = new ArrayList<>();
         for (TaskRecord t : tasks) copy.add(new TaskRecord(t));
-        Collections.sort(copy, Comparator.comparingLong(a -> -a.createdAt));
+        Collections.sort(copy, (a, b) -> Long.compare(b.createdAt, a.createdAt));
         return copy;
     }
 
     private TaskRecord find(String taskId) {
         for (TaskRecord t : tasks) {
-            if (t.taskId.equals(taskId)) return t;
+            if (Objects.equals(t.taskId, taskId)) return t;
         }
         return null;
     }

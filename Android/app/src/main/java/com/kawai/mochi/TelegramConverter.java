@@ -52,23 +52,13 @@ public class TelegramConverter {
 
     // ── Result model ─────────────────────────────────────────────────────────
 
-    public static class ImportedPackResult {
-        public final String identifier;
-        public final String name;
-        public final int stickerCount;
-        public final boolean isAnimated;
-        /** Number of animated stickers that were skipped (not converted). */
-        public final int skippedAnimatedCount;
-
-        ImportedPackResult(String identifier, String name, int stickerCount,
-                           boolean isAnimated, int skippedAnimatedCount) {
-            this.identifier           = identifier;
-            this.name                 = name;
-            this.stickerCount         = stickerCount;
-            this.isAnimated           = isAnimated;
-            this.skippedAnimatedCount = skippedAnimatedCount;
-        }
-    }
+    public record ImportedPackResult(
+            String identifier,
+            String name,
+            int stickerCount,
+            boolean isAnimated,
+            int skippedAnimatedCount
+    ) {}
 
     // ── Callback interface ────────────────────────────────────────────────────
 

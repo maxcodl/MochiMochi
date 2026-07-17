@@ -43,7 +43,7 @@ public class ConversionTasksActivity extends BaseActivity {
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
-            onBackPressed();
+            getOnBackPressedDispatcher().onBackPressed();
             return true;
         }
         return super.onOptionsItemSelected(item);
@@ -73,21 +73,14 @@ public class ConversionTasksActivity extends BaseActivity {
             title.setText(name);
             subtitle.setText(task.url);
 
-            String statusText;
-            switch (task.status) {
-                case RUNNING:
-                    statusText = getString(R.string.telegram_conversion_task_running, task.done, Math.max(task.total, task.done));
-                    break;
-                case SUCCEEDED:
-                    statusText = getString(R.string.telegram_conversion_task_done, task.results.size());
-                    break;
-                case FAILED:
-                    statusText = getString(R.string.telegram_conversion_task_failed, task.error != null ? task.error : "-");
-                    break;
-                default:
-                    statusText = getString(R.string.telegram_conversion_task_queued);
-                    break;
-            }
+            String statusText = switch (task.status) {
+                case RUNNING ->
+                        getString(R.string.telegram_conversion_task_running, task.done, Math.max(task.total, task.done));
+                case SUCCEEDED -> getString(R.string.telegram_conversion_task_done, task.results.size());
+                case FAILED ->
+                        getString(R.string.telegram_conversion_task_failed, task.error != null ? task.error : "-");
+                default -> getString(R.string.telegram_conversion_task_queued);
+            };
             status.setText(statusText);
 
             openButton.setOnClickListener(v -> {

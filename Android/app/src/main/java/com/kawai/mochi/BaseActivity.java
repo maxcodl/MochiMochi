@@ -18,7 +18,6 @@ import androidx.core.view.WindowCompat;
 import androidx.fragment.app.DialogFragment;
 
 import com.google.android.material.color.DynamicColors;
-import com.kawai.mochi.R;
 
 public abstract class BaseActivity extends AppCompatActivity {
 
@@ -69,7 +68,6 @@ public abstract class BaseActivity extends AppCompatActivity {
 
     @Override
     public boolean onSupportNavigateUp() {
-        onBackPressed();
         return true;
     }
 
@@ -89,13 +87,14 @@ public abstract class BaseActivity extends AppCompatActivity {
         @NonNull
         @Override
         public android.app.Dialog onCreateDialog(Bundle savedInstanceState) {
-            @StringRes final int title = getArguments().getInt(ARG_TITLE_ID);
-            String message = getArguments().getString(ARG_MESSAGE);
+            final Bundle arguments = requireArguments();
+            @StringRes final int title = arguments.getInt(ARG_TITLE_ID);
+            final String message = arguments.getString(ARG_MESSAGE);
 
-            AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(getActivity())
-                    .setMessage(message)
-                    .setCancelable(true)
-                    .setPositiveButton(android.R.string.ok, (dialog, which) -> dismiss());
+            AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(requireActivity());
+            dialogBuilder.setMessage(message);
+            dialogBuilder.setCancelable(true);
+            dialogBuilder.setPositiveButton(android.R.string.ok, (dialog, which) -> dismiss());
 
             if (title != 0) {
                 dialogBuilder.setTitle(title);

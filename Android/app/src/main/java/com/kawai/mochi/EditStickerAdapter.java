@@ -18,11 +18,10 @@ import com.facebook.imagepipeline.common.ImageDecodeOptions;
 import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.request.ImageRequestBuilder;
-import com.kawai.mochi.R;
+
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.ViewHolder> {
 
@@ -77,11 +76,13 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
         StickerItem item = items.get(position);
         Context context = holder.itemView.getContext();
 
-        Uri uri = null;
+        final Uri uri;
         if (item.newUri != null) {
             uri = item.newUri;
         } else if (item.packIdentifier != null && item.fileName != null) {
             uri = StickerPackLoader.getStickerAssetUri(item.packIdentifier, item.fileName);
+        } else {
+            uri = null;
         }
 
         // Optimization: Avoid redundant controller setup if URI is the same
@@ -91,10 +92,8 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
             if (!uri.equals(currentUri)) {
                 holder.stickerImage.setTag(R.id.sticker_image, uri);
                 
-                int size = holder.stickerImage.getWidth();
-                if (size <= 0) {
-                    size = (int) (96 * holder.itemView.getContext().getResources().getDisplayMetrics().density);
-                }
+                final int width = holder.stickerImage.getWidth();
+                final int size = (width > 0) ? width : (int) (96 * context.getResources().getDisplayMetrics().density);
                 // Animated stickers decode at 40% of display size to reduce per-frame memory and CPU
                 int renderSize = item.isAnimated ? (int) (size * 0.40f) : size;
                 
@@ -167,12 +166,13 @@ public class EditStickerAdapter extends RecyclerView.Adapter<EditStickerAdapter.
         holder.stickerImage.setTag(R.id.sticker_image, null);
     }
 
-    static class ViewHolder extends RecyclerView.ViewHolder {
-        SimpleDraweeView stickerImage;
-        ImageButton removeButton;
-        TextView emojisText;
+    public static class ViewHolder extends RecyclerView.ViewHolder {
+        @SuppressWarnings("deprecation")
+        final SimpleDraweeView stickerImage;
+        final ImageButton removeButton;
+        final TextView emojisText;
 
-        ViewHolder(@NonNull View itemView) {
+        public ViewHolder(@NonNull View itemView) {
             super(itemView);
             stickerImage = itemView.findViewById(R.id.sticker_image);
             removeButton = itemView.findViewById(R.id.remove_button);

@@ -2,8 +2,6 @@ package com.kawai.mochi;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.List;
 
 import android.graphics.Bitmap;
@@ -12,16 +10,13 @@ import android.util.Log;
 
 /**
  * Pure-Java animated WebP RIFF container assembler.
- *
  * Encodes a list of {@link Bitmap} frames into an animated WebP byte array without
  * any native library beyond {@link Bitmap#compress}.
- *
  * Container structure:
  *  RIFF … WEBP
  *    VP8X  (flags = animation)
- *    ANIM  (background colour, loop count)
+ *    ANIM  (background color, loop count)
  *    ANMF* (one per frame, each containing a VP8/VP8L chunk)
- *
  * Quality / size management mirrors the Python bot:
  *   Pass 1 – quality ladder [72, 58, 46, 34, 24]
  *   Pass 2 – fallback ladder [50, 38, 28, 20]
@@ -47,10 +42,9 @@ public class AnimatedWebPWriter {
         if (frames == null || frames.isEmpty()) {
             throw new IOException("No frames provided");
         }
-        if (frames.size() == 1) {
-            // Duplicate the single frame so WhatsApp accepts it as animated (≥ 2 frames required)
-            frames = java.util.Arrays.asList(frames.get(0), frames.get(0));
-        }
+        final List<Bitmap> actualFrames = (frames.size() == 1)
+                ? java.util.Arrays.asList(frames.get(0), frames.get(0))
+                : frames;
 
         int[] qualityLadder = {76, 68, 60, 52, 44, 36, 28, 22, 16};
         float[] scalePasses = {1.00f, 0.92f, 0.86f, 0.80f, 0.74f, 0.68f};
@@ -62,7 +56,7 @@ public class AnimatedWebPWriter {
         // 3) only then use frame decimation as a last resort
         for (int decimation : decimations) {
             int curDuration = Math.min(frameDurationMs * decimation, 1000);
-            List<Bitmap> decimatedFrames = decimate(frames, decimation);
+            List<Bitmap> decimatedFrames = decimate(actualFrames, decimation);
             if (decimatedFrames.size() < 2) continue;
 
             for (float scale : scalePasses) {
@@ -77,6 +71,8 @@ public class AnimatedWebPWriter {
                                     + " out=" + result.length);
                             return result;
                         }
+                        // If compression is lossless, quality ladder is ignored, so no point in continuing.
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) break;
                     }
                 } finally {
                     recycleScaledFrames(curFrames, decimatedFrames);
@@ -141,18 +137,15 @@ public class AnimatedWebPWriter {
             Bitmap.CompressFormat format = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
                     ? Bitmap.CompressFormat.WEBP_LOSSLESS
                     : Bitmap.CompressFormat.WEBP;
-            // Always 100: lossless mode ignores quality; size is controlled by
-            // scale/decimation passes in the outer loop, not per-frame quality.
-            int effectiveQuality = 100;
+
             for (int i = 0; i < frames.size(); i++) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(64 * 1024);
-                frames.get(i).compress(format, effectiveQuality, bos);
+                frames.get(i).compress(format, quality, bos);
                 frameData[i] = bos.toByteArray();
             }
 
             // 2. Assemble RIFF container
-            byte[] out = buildRiff(frameData, durationMs, frames.get(0).getWidth(), frames.get(0).getHeight());
-            return out;
+            return buildRiff(frameData, durationMs, frames.get(0).getWidth(), frames.get(0).getHeight());
         } catch (Exception e) {
             Log.d(TAG, "tryEncode: exception", e);
             return null;
@@ -200,9 +193,9 @@ public class AnimatedWebPWriter {
 
     /**
      * VP8X chunk: signals extended format with animation flag set.
-     * https://developers.google.com/speed/webp/docs/riff_container#extended_file_format
+     * <a href="https://developers.google.com/speed/webp/docs/riff_container#extended_file_format">WebP Container Doc</a>
      */
-    private static byte[] buildVp8x(int width, int height) throws IOException {
+    private static byte[] buildVp8x(int width, int height) {
         // chunk data = flags(1) + reserved(3) + canvas_width_minus_one(3) + canvas_height_minus_one(3)
         //            = 10 bytes
         ByteArrayOutputStream out = new ByteArrayOutputStream(18);
@@ -218,12 +211,12 @@ public class AnimatedWebPWriter {
     /**
      * ANIM chunk: global animation parameters.
      */
-    private static byte[] buildAnim() throws IOException {
+    private static byte[] buildAnim() {
         // chunk data = background_colour(4) + loop_count(2) = 6 bytes
         ByteArrayOutputStream out = new ByteArrayOutputStream(14);
         putFourCC(out, "ANIM");
         putLE32(out, 6);          // chunk size
-        putLE32(out, 0x00000000); // background colour = transparent black
+        putLE32(out, 0x00000000); // background color = transparent black
         putLE16(out, 0);          // loop_count = 0 (infinite)
         return out.toByteArray();
     }
@@ -261,7 +254,6 @@ public class AnimatedWebPWriter {
      *  - "VP8 "
      *  - "VP8L"
      *  - optional "ALPH" immediately followed by "VP8 "
-     *
      * Copying every chunk after the RIFF header can include unsupported chunks (for ANMF)
      * on some encoders/devices, which can lead to blank frames in WhatsApp.
      */
@@ -288,9 +280,7 @@ public class AnimatedWebPWriter {
             int paddedSize = size + (size & 1);
             int chunkTotal = 8 + paddedSize;
 
-            if ("VP8X".equals(fourcc)) {
-                // Extended header chunk; keep scanning for the actual frame chunk.
-            } else if ("ALPH".equals(fourcc)) {
+            if ("ALPH".equals(fourcc)) {
                 pendingAlph = new byte[chunkTotal];
                 System.arraycopy(webpBytes, pos, pendingAlph, 0, chunkTotal);
             } else if ("VP8 ".equals(fourcc) || "VP8L".equals(fourcc)) {
@@ -320,27 +310,27 @@ public class AnimatedWebPWriter {
 
     // ── Utility writers ───────────────────────────────────────────────────────
 
-    private static void putFourCC(ByteArrayOutputStream out, String fourcc) throws IOException {
+    private static void putFourCC(ByteArrayOutputStream out, String fourcc) {
         out.write(fourcc.charAt(0));
         out.write(fourcc.charAt(1));
         out.write(fourcc.charAt(2));
         out.write(fourcc.charAt(3));
     }
 
-    private static void putLE32(ByteArrayOutputStream out, int value) throws IOException {
+    private static void putLE32(ByteArrayOutputStream out, int value) {
         out.write(value & 0xFF);
         out.write((value >> 8) & 0xFF);
         out.write((value >> 16) & 0xFF);
         out.write((value >> 24) & 0xFF);
     }
 
-    private static void putLE24(ByteArrayOutputStream out, int value) throws IOException {
+    private static void putLE24(ByteArrayOutputStream out, int value) {
         out.write(value & 0xFF);
         out.write((value >> 8) & 0xFF);
         out.write((value >> 16) & 0xFF);
     }
 
-    private static void putLE16(ByteArrayOutputStream out, int value) throws IOException {
+    private static void putLE16(ByteArrayOutputStream out, int value) {
         out.write(value & 0xFF);
         out.write((value >> 8) & 0xFF);
     }

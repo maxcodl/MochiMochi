@@ -19,9 +19,9 @@ import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
-import com.kawai.mochi.R;
 
 import java.util.List;
+import java.util.Objects;
 
 import androidx.recyclerview.widget.ListAdapter;
 import androidx.recyclerview.widget.DiffUtil;
@@ -39,16 +39,16 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
     private boolean animationsCacheValid = false;
 
     StickerPackListAdapter(@NonNull OnAddButtonClickedListener onAddButtonClickedListener) {
-        super(new DiffUtil.ItemCallback<StickerPack>() {
+        super(new DiffUtil.ItemCallback<>() {
             @Override
             public boolean areItemsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
-                return oldItem.identifier.equals(newItem.identifier);
+                return Objects.equals(oldItem.identifier, newItem.identifier);
             }
 
             @Override
             public boolean areContentsTheSame(@NonNull StickerPack oldItem, @NonNull StickerPack newItem) {
-                if (!oldItem.name.equals(newItem.name)) return false;
-                if (!oldItem.publisher.equals(newItem.publisher)) return false;
+                if (!Objects.equals(oldItem.name, newItem.name)) return false;
+                if (!Objects.equals(oldItem.publisher, newItem.publisher)) return false;
                 if (oldItem.getTotalSize() != newItem.getTotalSize()) return false;
                 if (oldItem.getIsWhitelisted() != newItem.getIsWhitelisted()) return false;
                 int oldCount = oldItem.getStickers() != null ? oldItem.getStickers().size() : 0;
@@ -56,8 +56,8 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
                 if (oldCount != newCount) return false;
                 if (oldCount > 0) {
                     for (int i = 0; i < oldCount; i++) {
-                        if (!oldItem.getStickers().get(i).imageFileName
-                                .equals(newItem.getStickers().get(i).imageFileName)) {
+                        if (!Objects.equals(oldItem.getStickers().get(i).imageFileName,
+                                newItem.getStickers().get(i).imageFileName)) {
                             return false;
                         }
                     }
@@ -159,7 +159,7 @@ public class StickerPackListAdapter extends ListAdapter<StickerPack, StickerPack
 
             // ---- PREFETCH THUMBNAILS IN BACKGROUND ----
             final StickerPreviewAdapter finalAdapter = adapter;
-            new Thread(() -> finalAdapter.prefetchThumbnails()).start();
+            new Thread(finalAdapter::prefetchThumbnails).start();
             // -----------------------------------------
 
         } else {

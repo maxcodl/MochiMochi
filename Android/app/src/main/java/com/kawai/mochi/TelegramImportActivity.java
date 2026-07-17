@@ -2,6 +2,8 @@ package com.kawai.mochi;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+
+import androidx.annotation.RequiresApi;
 import androidx.core.app.ActivityCompat;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
@@ -38,10 +40,10 @@ import com.google.android.material.textfield.TextInputLayout;
 
 import org.json.JSONObject;
 
-import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.Objects;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -94,7 +96,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             if (!TelegramConversionService.ACTION_TASK_UPDATED.equals(intent.getAction())) return;
             String taskId = intent.getStringExtra(TelegramConversionService.EXTRA_TASK_ID);
             if (taskId == null) return;
-            if (activeTaskId == null || !activeTaskId.equals(taskId)) return;
+            if (!Objects.equals(activeTaskId, taskId)) return;
             renderTaskSnapshot();
         }
     };
@@ -152,6 +154,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         }
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.N)
     @Override
     protected void updateProgress(int current, int total, String message) {
         if (progressBar != null) {
@@ -317,7 +320,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
     @Override
     public boolean onOptionsItemSelected(MenuItem item) {
         if (item.getItemId() == android.R.id.home) {
-            onBackPressed();
+            getOnBackPressedDispatcher().onBackPressed();
             return true;
         }
         return super.onOptionsItemSelected(item);
@@ -425,7 +428,11 @@ public class TelegramImportActivity extends AddStickerPackActivity {
             if (task.total > 0) {
                 progressBar.setIndeterminate(false);
                 progressBar.setMax(task.total);
-                progressBar.setProgress(task.done, true);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    progressBar.setProgress(task.done, true);
+                } else {
+                    progressBar.setProgress(task.done);
+                }
                 progressText.setText(getString(R.string.tg_progress_label, task.done, task.total));
             } else {
                 progressBar.setIndeterminate(true);
@@ -451,26 +458,31 @@ public class TelegramImportActivity extends AddStickerPackActivity {
 
         int totalSkippedAnimated = 0;
         for (ConversionTaskManager.TaskPackResult r : task.results) {
-            totalSkippedAnimated += r.skippedAnimatedCount;
+            totalSkippedAnimated += r.skippedAnimatedCount();
         }
 
         // Add a result card for each real pack (non-empty identifier)
         for (ConversionTaskManager.TaskPackResult r : task.results) {
-            if (r.identifier == null || r.identifier.isEmpty()) continue; // animated-only placeholder
+            if (r.identifier() == null || r.identifier().isEmpty()) continue; // animated-only placeholder
             TelegramConverter.ImportedPackResult converted = new TelegramConverter.ImportedPackResult(
-                    r.identifier,
-                    r.name,
-                    r.stickerCount,
-                    r.isAnimated,
-                    r.skippedAnimatedCount
+                    r.identifier(),
+                    r.name(),
+                    r.stickerCount(),
+                    r.isAnimated(),
+                    r.skippedAnimatedCount()
             );
             addResultCard(converted);
         }
 
         // Show the animated-not-supported banner if any stickers were skipped
         if (totalSkippedAnimated > 0) {
-            boolean allAnimated = task.results.stream()
-                    .allMatch(r -> r.identifier == null || r.identifier.isEmpty());
+            boolean allAnimated = true;
+            for (ConversionTaskManager.TaskPackResult r : task.results) {
+                if (!(r.identifier() == null || r.identifier().isEmpty())) {
+                    allAnimated = false;
+                    break;
+                }
+            }
             resultsContainer.addView(buildAnimatedNotSupportedBanner(totalSkippedAnimated, allAnimated));
         }
 
@@ -504,14 +516,14 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         MaterialButton addBtn    = card.findViewById(R.id.result_add_to_whatsapp);
         MaterialButton exportBtn = card.findViewById(R.id.result_export_button);
 
-        icon.setImageResource(result.isAnimated ? R.drawable.animated_pack_indicator : R.drawable.ic_fab_add);
-        name.setText(result.name);
-        badge.setText(result.isAnimated ? R.string.animated_badge : R.string.static_badge);
+        icon.setImageResource(result.isAnimated() ? R.drawable.animated_pack_indicator : R.drawable.ic_fab_add);
+        name.setText(result.name());
+        badge.setText(result.isAnimated() ? R.string.animated_badge : R.string.static_badge);
         count.setText(getResources().getQuantityString(
-                R.plurals.sticker_count_plural, result.stickerCount, result.stickerCount));
+                R.plurals.sticker_count_plural, result.stickerCount(), result.stickerCount()));
 
-        addBtn.setOnClickListener(v -> addStickerPackToWhatsApp(result.identifier, result.name));
-        exportBtn.setOnClickListener(v -> exportConvertedPack(result.identifier, result.name));
+        addBtn.setOnClickListener(v -> addStickerPackToWhatsApp(result.identifier(), result.name()));
+        exportBtn.setOnClickListener(v -> exportConvertedPack(result.identifier(), result.name()));
 
         resultsContainer.addView(card);
     }
@@ -527,7 +539,6 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         com.google.android.material.card.MaterialCardView banner =
                 new com.google.android.material.card.MaterialCardView(this);
         int dp16 = (int) (16 * getResources().getDisplayMetrics().density);
-        int dp8  = (int) (8  * getResources().getDisplayMetrics().density);
         int dp12 = (int) (12 * getResources().getDisplayMetrics().density);
         LinearLayout.LayoutParams bannerLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -539,12 +550,17 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         banner.setStrokeWidth(0);
 
         // Background: colorSecondaryContainer
-        int[] attrs = new int[]{com.google.android.material.R.attr.colorSecondaryContainer,
-                                com.google.android.material.R.attr.colorOnSecondaryContainer};
-        android.content.res.TypedArray ta = obtainStyledAttributes(attrs);
-        int bgColor   = ta.getColor(0, 0xFFE8DEF8);
-        int textColor = ta.getColor(1, 0xFF21005D);
-        ta.recycle();
+        int[] attrsArr = new int[]{com.google.android.material.R.attr.colorSecondaryContainer,
+                                   com.google.android.material.R.attr.colorOnSecondaryContainer};
+        android.content.res.TypedArray ta = obtainStyledAttributes(attrsArr);
+        int bgColor;
+        int textColor;
+        try {
+            bgColor = ta.getColor(0, 0xFFE8DEF8);
+            textColor = ta.getColor(1, 0xFF21005D);
+        } finally {
+            ta.recycle();
+        }
 
         banner.setCardBackgroundColor(bgColor);
 
@@ -598,8 +614,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
 
     private void appendLog(String message) {
         logCard.setVisibility(View.VISIBLE);
-        String current = logTextView.getText() != null ? logTextView.getText().toString() : "";
-        logTextView.setText(current + message + "\n");
+        logTextView.append(message + "\n");
         logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
     }
 
@@ -665,7 +680,7 @@ public class TelegramImportActivity extends AddStickerPackActivity {
         if (packNameInput == null) return;
 
         String current = packNameInput.getText() != null ? packNameInput.getText().toString().trim() : "";
-        boolean shouldApply = !packNameManuallyEdited || current.isEmpty() || current.equals(lastAutoFilledPackName);
+        boolean shouldApply = !packNameManuallyEdited || current.isEmpty() || Objects.equals(current, lastAutoFilledPackName);
         if (!shouldApply) return;
 
         suppressPackNameWatcher = true;

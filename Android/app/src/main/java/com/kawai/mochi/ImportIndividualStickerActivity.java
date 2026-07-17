@@ -5,7 +5,6 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.view.View;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -20,6 +19,7 @@ import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -39,15 +39,18 @@ public class ImportIndividualStickerActivity extends BaseActivity {
         statusText = findViewById(R.id.import_status_text);
 
         Intent intent = getIntent();
-        Uri uri = null;
+        final String action = intent.getAction();
+        Uri uri;
 
-        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+        if (Intent.ACTION_SEND.equals(action)) {
             uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
             if (uri == null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
                 uri = intent.getClipData().getItemAt(0).getUri();
             }
-        } else if (Intent.ACTION_VIEW.equals(intent.getAction())) {
+        } else if (Intent.ACTION_VIEW.equals(action)) {
             uri = intent.getData();
+        } else {
+            uri = null;
         }
 
         if (uri == null) {
@@ -165,7 +168,7 @@ public class ImportIndividualStickerActivity extends BaseActivity {
 
     private static String getFileNameFromUri(ImportIndividualStickerActivity activity, Uri uri) {
         String result = null;
-        if (uri.getScheme() != null && uri.getScheme().equals("content")) {
+        if (uri.getScheme() != null && Objects.equals(uri.getScheme(), "content")) {
             try (android.database.Cursor cursor = activity.getContentResolver().query(uri, null, null, null, null)) {
                 if (cursor != null && cursor.moveToFirst()) {
                     int idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
@@ -291,6 +294,8 @@ public class ImportIndividualStickerActivity extends BaseActivity {
             File[] children = fileOrDir.listFiles();
             if (children != null) for (File child : children) deleteRecursive(child);
         }
-        fileOrDir.delete();
+        if (!fileOrDir.delete()) {
+            android.util.Log.w("ImportActivity", "Failed to delete: " + fileOrDir.getAbsolutePath());
+        }
     }
 }

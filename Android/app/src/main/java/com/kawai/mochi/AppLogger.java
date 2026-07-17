@@ -23,8 +23,4 @@ public class AppLogger {
         }
         return sb.toString();
     }
-
-    public static synchronized void clear() {
-        buffer.clear();
-    }
 }

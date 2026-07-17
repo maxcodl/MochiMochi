@@ -287,7 +287,13 @@ def is_valid_webp_output(data: bytes, require_animated: bool = False) -> tuple[b
 async def verify_sticker(sticker_data: bytes, is_animated: bool, is_video: bool, file_id: str) -> dict:
     result = {'valid': True, 'reason': '', 'warnings': []}
     try:
-        min_size = 3 * 1024
+        # Static images can legitimately be very small (simple flat-color
+        # icons/logos can compress under 1KB), so only apply a hard minimum
+        # to animated/video stickers where a valid file realistically can't
+        # be this tiny. Static stickers are instead validated for real via
+        # PIL's decode + verify() below, which is a much more reliable
+        # corruption check than a raw byte-size guess.
+        min_size = 1024 if not (is_animated or is_video) else 3 * 1024
         if len(sticker_data) < min_size:
             result['valid'] = False
             result['reason'] = f"File too small ({len(sticker_data)} bytes, minimum: {min_size} bytes) - likely corrupt or invalid"
