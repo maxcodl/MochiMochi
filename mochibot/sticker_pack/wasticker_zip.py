@@ -13,7 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 from config import BASE_DIR, STICKER_THUMB_QUALITY, STICKER_THUMB_SIZE, WA_MAX_BYTES
-from conversion.animated import _is_animated_webp_bytes, is_valid_webp_output
+from conversion.animated import _count_webp_frames, _is_animated_webp_bytes, is_valid_webp_output
 from conversion.static import (
     _convert_static_bytes_to_webp,
     convert_to_whatsapp_one_frame_animation,
@@ -233,8 +233,8 @@ async def create_wastickers_zip(
                             animated_out = await convert_to_whatsapp_animated(sticker_data, sticker.is_animated)
                             converted_bytes = animated_out.getvalue()
                             animated_out.close()
-                            if not _is_animated_webp_bytes(converted_bytes):
-                                logger.warning(f"Sticker {i}: animated conversion produced static output — wrapping as 1-frame animation")
+                            if not _is_animated_webp_bytes(converted_bytes) or _count_webp_frames(converted_bytes) < 2:
+                                logger.warning(f"Sticker {i}: animated conversion produced <2 frames — wrapping as 1-frame animation")
                                 try:
                                     with Image.open(BytesIO(converted_bytes)) as img:
                                         fallback_out = await resources.run_cpu_bound(convert_to_whatsapp_one_frame_animation, img)
@@ -263,8 +263,15 @@ async def create_wastickers_zip(
                         except Exception:
                             return {'index': i, 'ok': False, 'reason': 'static conversion failed', 'kind': 'invalid', 'warnings': verification['warnings']}
 
-                    if should_be_animated and not _is_animated_webp_bytes(converted_bytes):
-                        return {'index': i, 'ok': False, 'reason': 'produced static WebP instead of animated', 'kind': 'invalid', 'warnings': verification['warnings']}
+                    if should_be_animated and (not _is_animated_webp_bytes(converted_bytes) or _count_webp_frames(converted_bytes) < 2):
+                        logger.warning(f"Sticker {i}: output has <2 frames before validation — applying 1-frame animation wrapper")
+                        try:
+                            with Image.open(BytesIO(converted_bytes)) as img:
+                                fallback_out = await resources.run_cpu_bound(convert_to_whatsapp_one_frame_animation, img)
+                                converted_bytes = fallback_out.getvalue()
+                                fallback_out.close()
+                        except Exception as fe:
+                            return {'index': i, 'ok': False, 'reason': f'1-frame fallback failed: {fe}', 'kind': 'invalid', 'warnings': verification['warnings']}
 
                     if len(converted_bytes) > WA_MAX_BYTES:
                         return {'index': i, 'ok': False, 'reason': f"oversized after conversion ({len(converted_bytes) // 1024}KB)", 'kind': 'invalid', 'warnings': verification['warnings']}

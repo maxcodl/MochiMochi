@@ -71,7 +71,13 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
                 img_rgba.thumbnail((512, 512), Image.LANCZOS)
                 canvas.paste(img_rgba, ((512 - img_rgba.width) // 2, (512 - img_rgba.height) // 2), img_rgba)
                 img_rgba.close()
-                pil_frames.append(canvas)
+        if len(pil_frames) == 1:
+            logger.info("TGS render produced 1 frame; duplicating with toggled bit for WhatsApp animation requirement")
+            duplicate_canvas = pil_frames[0].copy()
+            px = duplicate_canvas.load()
+            r, g, b, a = px[0, 0]
+            px[0, 0] = (r, g, b, 1 if a == 0 else 0)
+            pil_frames.append(duplicate_canvas)
         logger.info(f"Rendered {len(pil_frames)} TGS frames in-process")
     except asyncio.TimeoutError:
         logger.warning(f"TGS in-process render timed out after {timeout_secs}s, falling back to GIF")
@@ -80,7 +86,7 @@ async def convert_tgs_to_animated_webp(tgs_data: bytes) -> BytesIO:
         logger.warning(f"In-process lottie render failed: {png_err}, falling back to GIF subprocess")
         pil_frames = None
 
-    if pil_frames is None or len(pil_frames) < 2:
+    if pil_frames is None or len(pil_frames) == 0:
         if pil_frames:
             for f in pil_frames:
                 f.close()

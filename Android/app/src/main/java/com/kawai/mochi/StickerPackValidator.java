@@ -14,7 +14,6 @@ import android.graphics.BitmapFactory;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.Patterns;
-import android.webkit.URLUtil;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -173,7 +172,16 @@ class StickerPackValidator {
     }
 
     private static boolean isValidWebsiteUrl(String websiteUrl) {
-        return URLUtil.isHttpUrl(websiteUrl) || URLUtil.isHttpsUrl(websiteUrl);
+        if (websiteUrl == null || websiteUrl.trim().isEmpty()) {
+            return false;
+        }
+        try {
+            URL url = new URL(websiteUrl);
+            String protocol = url.getProtocol();
+            return "http".equalsIgnoreCase(protocol) || "https".equalsIgnoreCase(protocol);
+        } catch (MalformedURLException e) {
+            return false;
+        }
     }
 
     private static boolean isURLInCorrectDomain(String urlString, String domain) {

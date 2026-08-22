@@ -7,6 +7,8 @@ from io import BytesIO
 import av
 from PIL import Image
 
+from .video import _frame_to_rgba_pil
+
 logger = logging.getLogger(__name__)
 
 
@@ -47,10 +49,34 @@ def optimize_tray_icon(tray_data: bytes, is_animated: bool = False) -> BytesIO:
                 # PyAV extraction of frame 0 directly from video container (no ffmpeg CLI subprocess)
                 try:
                     with av.open(BytesIO(tray_data)) as container:
-                        for frame in container.decode(video=0):
-                            img = frame.to_image().convert("RGBA")
-                            logger.info("Successfully extracted first frame via PyAV for tray icon")
-                            break
+                        if container.streams.video:
+                            stream = container.streams.video[0]
+                            decoder = None
+                            if stream.codec_context.name == "vp9" and "libvpx-vp9" in av.codecs_available:
+                                try:
+                                    decoder = av.CodecContext.create("libvpx-vp9", "r")
+                                    if stream.codec_context.extradata:
+                                        decoder.extradata = stream.codec_context.extradata
+                                except Exception:
+                                    decoder = None
+
+                            if decoder:
+                                for packet in container.demux(stream):
+                                    try:
+                                        frames = decoder.decode(packet)
+                                    except (av.error.EOFError, av.error.FFmpegError):
+                                        break
+                                    for frame in frames:
+                                        img = _frame_to_rgba_pil(frame)
+                                        break
+                                    if img is not None:
+                                        break
+                            else:
+                                for frame in container.decode(video=0):
+                                    img = _frame_to_rgba_pil(frame)
+                                    break
+                            if img is not None:
+                                logger.info("Successfully extracted first frame via PyAV for tray icon")
                 except Exception as av_err:
                     logger.warning(f"PyAV frame 0 extraction failed for tray icon: {av_err}")
                     img = None

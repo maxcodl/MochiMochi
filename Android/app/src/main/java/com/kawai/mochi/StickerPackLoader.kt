@@ -53,7 +53,7 @@ object StickerPackLoader {
             root?.listFiles()?.filter { it.isDirectory }?.associateBy { it.name }
         } else null
 
-        // Parallelize fetching stickers and sizes
+        // Parallelize fetching stickers, sizes, and whitelist status
         val deferreds = dedupedList.map { stickerPack ->
             async {
                 try {
@@ -62,6 +62,8 @@ object StickerPackLoader {
                     populateStickerSizes(context, stickerPack.identifier, stickers, stickerPack.animatedStickerPack, packDirsMap?.get(stickerPack.identifier))
                     stickerPack.setStickers(stickers)
                     stickers.forEach { it.isAnimated = stickerPack.animatedStickerPack }
+                    val whitelisted = WhitelistCheck.isWhitelisted(context, stickerPack.identifier)
+                    stickerPack.isWhitelisted = whitelisted
                 } catch (e: Exception) {
                     Log.w(TAG, "Skipping invalid pack '${stickerPack.name}': ${e.message}")
                 }
@@ -85,6 +87,8 @@ object StickerPackLoader {
                 val stickers = fetchFromContentProviderForStickers(pack.identifier, context.contentResolver)
                 populateStickerSizes(context, pack.identifier, stickers, pack.animatedStickerPack)
                 pack.setStickers(stickers)
+                val whitelisted = WhitelistCheck.isWhitelisted(context, pack.identifier)
+                pack.isWhitelisted = whitelisted
                 pack
             } catch (e: Exception) {
                 Log.w(TAG, "Skipping invalid imported pack '$identifier': ${e.message}")

@@ -5,12 +5,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
-import android.view.Menu
-import android.view.MenuItem
 import android.view.View
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.Toolbar
@@ -22,8 +22,9 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.kawai.mochi.R
 import kotlinx.coroutines.Dispatchers
@@ -33,18 +34,19 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.Pair
 
-
 class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationManager.Listener {
     private lateinit var packLayoutManager: LinearLayoutManager
     private lateinit var packRecyclerView: RecyclerView
     private lateinit var allStickerPacksListAdapter: StickerPackListAdapter
     private var stickerPackList = ArrayList<StickerPack>()
-    private lateinit var emptyStateLayout: View
-    private lateinit var importFab: ExtendedFloatingActionButton
     private lateinit var filePickerLauncher: ActivityResultLauncher<Intent>
     private lateinit var swipeRefresh: SwipeRefreshLayout
-    private var migrationJob: Job? = null
+    private lateinit var emptyStateLayout: View
     private lateinit var itemTouchHelper: ItemTouchHelper
+    private lateinit var mainFab: FloatingActionButton
+    private lateinit var fabScrim: View
+    private lateinit var fabMenuContainer: LinearLayout
+    private var isFabMenuOpen = false
     
     private var importProgressContainer: View? = null
     private var importProgressBar: LinearProgressIndicator? = null
@@ -54,34 +56,21 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            refreshStickerPacks(true) // Silent refresh
-        }
-    }
-
-    private val scrollListener = object : RecyclerView.OnScrollListener() {
-        override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
-            // Feature removed: no longer notifying adapter of scroll state
-        }
-
-        override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-            super.onScrolled(recyclerView, dx, dy)
-            if (dy > 0 && importFab.isExtended) importFab.shrink() 
-            else if (dy < 0 && !importFab.isExtended) importFab.extend()
+            refreshStickerPacks(true)
         }
     }
 
     private val settingsLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) { 
-        allStickerPacksListAdapter.invalidateAnimationsCache()
-        refreshStickerPacks(true) // Silent refresh: Fix for unwanted refresh animation
+    ) {
+        refreshStickerPacks(true)
     }
 
     private val mergePacksLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            refreshStickerPacks(true) // Silent refresh
+            refreshStickerPacks(true)
         }
     }
 
@@ -117,7 +106,9 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         swipeRefresh = findViewById(R.id.swipe_refresh)
         packRecyclerView = findViewById(R.id.sticker_pack_list)
         emptyStateLayout = findViewById(R.id.empty_state_layout)
-        importFab = findViewById(R.id.import_button_fab)
+        mainFab = findViewById(R.id.main_fab)
+        fabScrim = findViewById(R.id.fab_scrim)
+        fabMenuContainer = findViewById(R.id.fab_menu_container)
         
         importProgressContainer = findViewById(R.id.import_progress_container)
         importProgressBar = findViewById(R.id.import_progress_bar)
@@ -132,7 +123,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         
         stickerPackList = intentList ?: ArrayList()
 
-        supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+        supportActionBar?.title = getString(R.string.app_name)
 
         filePickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == RESULT_OK) {
@@ -145,7 +136,51 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         showStickerPackList(stickerPackList)
 
         findViewById<Button>(R.id.import_button)?.setOnClickListener { showImportChoice() }
-        importFab.setOnClickListener { showImportChoice() }
+        
+        mainFab.setOnClickListener {
+            toggleFabMenu()
+        }
+
+        fabScrim.setOnClickListener {
+            closeFabMenu()
+        }
+
+        findViewById<MaterialButton>(R.id.fab_action_import_file)?.setOnClickListener {
+            closeFabMenu()
+            openFilePicker()
+        }
+
+        findViewById<MaterialButton>(R.id.fab_action_import_telegram)?.setOnClickListener {
+            closeFabMenu()
+            telegramImportLauncher.launch(
+                Intent(this, TelegramImportActivity::class.java)
+            )
+        }
+
+        findViewById<MaterialButton>(R.id.fab_action_merge_packs)?.setOnClickListener {
+            closeFabMenu()
+            mergePacksLauncher.launch(
+                Intent(this, MergeStickerPacksActivity::class.java)
+            )
+        }
+
+        findViewById<MaterialButton>(R.id.fab_action_settings)?.setOnClickListener {
+            closeFabMenu()
+            settingsLauncher.launch(
+                Intent(this, SettingsActivity::class.java)
+            )
+        }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (isFabMenuOpen) {
+                    closeFabMenu()
+                } else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
 
         swipeRefresh.setOnRefreshListener {
             refreshStickerPacks(true)
@@ -235,7 +270,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
                 }
                 
                 updateEmptyState()
-                supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+                supportActionBar?.title = getString(R.string.app_name)
                 
             } catch (e: Exception) {
                 Log.e("ListActivity", "Refresh failed", e)
@@ -252,7 +287,6 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         }
         allStickerPacksListAdapter.notifyItemChanged(position)
     }
-
 
     private fun showImportChoice() {
         val sheet = ImportChoiceBottomSheet.newInstance()
@@ -317,7 +351,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
                 StickerUpdateManager.triggerUpdate()
 
                 updateEmptyState()
-                supportActionBar?.title = resources.getQuantityString(R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+                supportActionBar?.title = getString(R.string.app_name)
                 if (stickerPackList.isNotEmpty()) {
                     packRecyclerView.smoothScrollToPosition(stickerPackList.size - 1)
                 }
@@ -338,8 +372,7 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         stickerPackList.removeAt(position)
         allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
         updateEmptyState()
-        supportActionBar?.title = resources.getQuantityString(
-            R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+        supportActionBar?.title = getString(R.string.app_name)
 
         lifecycleScope.launch {
             try {
@@ -352,46 +385,84 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
                 stickerPackList.add(position.coerceAtMost(stickerPackList.size), pack)
                 allStickerPacksListAdapter.submitList(ArrayList(stickerPackList))
                 updateEmptyState()
-                supportActionBar?.title = resources.getQuantityString(
-                    R.plurals.title_activity_sticker_packs_list, stickerPackList.size)
+                supportActionBar?.title = getString(R.string.app_name)
                 Toast.makeText(this@StickerPackListActivity, getString(R.string.error_with_message, e.message), Toast.LENGTH_LONG).show()
             }
         }
     }
 
-
     private fun updateEmptyState() {
         if (stickerPackList.isEmpty()) {
             packRecyclerView.visibility = View.GONE
             emptyStateLayout.visibility = View.VISIBLE
-            importFab.visibility = View.GONE
+            mainFab.visibility = View.GONE
+            closeFabMenu()
         } else {
             packRecyclerView.visibility = View.VISIBLE
             emptyStateLayout.visibility = View.GONE
-            importFab.visibility = View.VISIBLE
+            mainFab.visibility = View.VISIBLE
         }
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(Menu.NONE, 1001, Menu.NONE, R.string.settings)
-            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
-        menu.add(Menu.NONE, 1002, Menu.NONE, R.string.merge_packs_menu_item)
-            .setShowAsAction(MenuItem.SHOW_AS_ACTION_NEVER)
-        return true
+    private fun toggleFabMenu() {
+        if (isFabMenuOpen) {
+            closeFabMenu()
+        } else {
+            openFabMenu()
+        }
     }
 
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            1001 -> {
-                settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
-                true
-            }
-            1002 -> {
-                mergePacksLauncher.launch(Intent(this, MergeStickerPacksActivity::class.java))
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
+    private fun openFabMenu() {
+        if (isFabMenuOpen) return
+        isFabMenuOpen = true
+
+        fabScrim.visibility = View.VISIBLE
+        fabScrim.alpha = 0f
+        fabScrim.animate().alpha(1f).setDuration(250).start()
+
+        fabMenuContainer.visibility = View.VISIBLE
+        val count = fabMenuContainer.childCount
+        for (i in 0 until count) {
+            val child = fabMenuContainer.getChildAt(i)
+            child.alpha = 0f
+            child.translationY = 40f
+            child.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setInterpolator(android.view.animation.OvershootInterpolator(1.2f))
+                .setDuration(250)
+                .setStartDelay(((count - 1 - i) * 35).toLong())
+                .start()
         }
+
+        mainFab.animate().rotation(45f).setDuration(250).start()
+    }
+
+    private fun closeFabMenu() {
+        if (!isFabMenuOpen) return
+        isFabMenuOpen = false
+
+        fabScrim.animate().alpha(0f).setDuration(200).withEndAction {
+            fabScrim.visibility = View.GONE
+        }.start()
+
+        val count = fabMenuContainer.childCount
+        for (i in 0 until count) {
+            val child = fabMenuContainer.getChildAt(i)
+            child.animate()
+                .alpha(0f)
+                .translationY(30f)
+                .setDuration(150)
+                .start()
+        }
+
+        fabMenuContainer.postDelayed({
+            if (!isFabMenuOpen) {
+                fabMenuContainer.visibility = View.GONE
+            }
+        }, 180)
+
+        mainFab.animate().rotation(0f).setDuration(250).start()
     }
 
     override fun onResume() {
@@ -420,8 +491,6 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         packRecyclerView.layoutAnimation = null
         packRecyclerView.adapter = allStickerPacksListAdapter
         packRecyclerView.setHasFixedSize(true)
-        packRecyclerView.addOnScrollListener(scrollListener)
-        
         globalLayoutListener = android.view.ViewTreeObserver.OnGlobalLayoutListener { recalculateColumnCount() }
         packRecyclerView.viewTreeObserver.addOnGlobalLayoutListener(globalLayoutListener)
     }
@@ -431,15 +500,15 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         if (rvWidth <= 0) return
 
         val density = resources.displayMetrics.density
-        // Correct overhead: Card margins (12+12) + RV start (16) + RV to button (16) + button (48) + button end (16)
-        val overhead = Math.round((12 + 12 + 16 + 16 + 48 + 16) * density)
+        // Correct overhead: Card margins (16+16) + RV start (18) + RV to button (16) + button (48) + button end (18)
+        val overhead = Math.round((16 + 16 + 18 + 16 + 48 + 18) * density)
         val imageRowWidth = rvWidth - overhead
         if (imageRowWidth <= 0) return
 
         val maxNumberOfImagesInARow = STICKER_PREVIEW_DISPLAY_LIMIT
         
         // Aim for a small fixed margin between stickers
-        val desiredMargin = Math.round(4 * density)
+        val desiredMargin = Math.round(6 * density)
         val totalMargin = desiredMargin * (maxNumberOfImagesInARow - 1)
         
         // Calculate the preview size that allows exactly 5 stickers to fit

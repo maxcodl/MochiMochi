@@ -37,11 +37,14 @@ public class BotTokenInputDialog {
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(48, 32, 48, 0);
 
+        int onSurfaceColor = com.google.android.material.color.MaterialColors.getColor(context, com.google.android.material.R.attr.colorOnSurface, android.graphics.Color.WHITE);
+        int onSurfaceVariantColor = com.google.android.material.color.MaterialColors.getColor(context, com.google.android.material.R.attr.colorOnSurfaceVariant, android.graphics.Color.GRAY);
+
         // Title explanation
         TextView titleView = new TextView(context);
         titleView.setText(R.string.telegram_bot_token_title);
         titleView.setTextSize(16);
-        titleView.setTextColor(context.getResources().getColor(android.R.color.black, context.getTheme()));
+        titleView.setTextColor(onSurfaceColor);
         layout.addView(titleView);
 
         // Subtitle
@@ -49,7 +52,7 @@ public class BotTokenInputDialog {
             TextView subtitleView = new TextView(context);
             subtitleView.setText(subtitleMessage);
             subtitleView.setTextSize(12);
-            subtitleView.setTextColor(context.getResources().getColor(android.R.color.darker_gray, context.getTheme()));
+            subtitleView.setTextColor(onSurfaceVariantColor);
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
@@ -63,7 +66,7 @@ public class BotTokenInputDialog {
         TextView descriptionView = new TextView(context);
         descriptionView.setText(R.string.telegram_bot_token_description);
         descriptionView.setTextSize(12);
-        descriptionView.setTextColor(context.getResources().getColor(android.R.color.darker_gray, context.getTheme()));
+        descriptionView.setTextColor(onSurfaceVariantColor);
         LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT

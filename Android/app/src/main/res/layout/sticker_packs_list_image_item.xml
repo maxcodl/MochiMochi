@@ -4,6 +4,8 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="@dimen/sticker_pack_list_item_preview_image_size"
     android:layout_height="@dimen/sticker_pack_list_item_preview_image_size"
+    android:background="@drawable/sticker_preview_tile_bg"
+    android:clipToOutline="true"
     android:padding="@dimen/sticker_pack_list_item_preview_image_padding">
 
     <com.facebook.shimmer.ShimmerFrameLayout

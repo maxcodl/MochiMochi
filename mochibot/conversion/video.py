@@ -60,6 +60,15 @@ def probe_video_stream(video_data: bytes) -> tuple[float, float, int]:
         return 0.0, 15.0, 0
 
 
+def _frame_to_rgba_pil(frame: av.VideoFrame) -> Image.Image:
+    """Converts a PyAV VideoFrame to an RGBA PIL Image preserving any alpha channel."""
+    try:
+        rgba_arr = frame.to_ndarray(format="rgba")
+        return Image.fromarray(rgba_arr, mode="RGBA")
+    except Exception:
+        return frame.to_image().convert("RGBA")
+
+
 def decode_video_frames_to_pil(video_data: bytes, target_fps: float, max_frames: int) -> list[Image.Image]:
     """Decodes video frames directly into memory as 512x512 RGBA PIL Images without disk intermediate files."""
     pil_frames = []
@@ -71,9 +80,10 @@ def decode_video_frames_to_pil(video_data: bytes, target_fps: float, max_frames:
             stream.thread_type = "AUTO"
             try:
                 from storage import storage
-                stream.codec_context.thread_count = storage.get("ffmpeg_threads", 1)
+                thread_count = storage.get("ffmpeg_threads", 1)
+                stream.codec_context.thread_count = thread_count
             except Exception:
-                pass
+                thread_count = 1
 
             input_fps = parse_frame_rate(stream.average_rate or stream.guessed_rate or 15.0)
             if input_fps <= 0:
@@ -83,9 +93,21 @@ def decode_video_frames_to_pil(video_data: bytes, target_fps: float, max_frames:
             frame_idx = 0
             next_sample = 0.0
 
-            for frame in container.decode(video=0):
+            decoder = None
+            if stream.codec_context.name == "vp9" and "libvpx-vp9" in av.codecs_available:
+                try:
+                    decoder = av.CodecContext.create("libvpx-vp9", "r")
+                    decoder.thread_count = thread_count
+                    if stream.codec_context.extradata:
+                        decoder.extradata = stream.codec_context.extradata
+                except Exception as e:
+                    logger.debug(f"Could not create libvpx-vp9 decoder context: {e}")
+                    decoder = None
+
+            def _process_frame(frame: av.VideoFrame) -> bool:
+                nonlocal frame_idx, next_sample
                 if frame_idx >= next_sample:
-                    img = frame.to_image().convert("RGBA")
+                    img = _frame_to_rgba_pil(frame)
                     canvas = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
                     img.thumbnail((512, 512), Image.LANCZOS)
                     x = (512 - img.width) // 2
@@ -95,9 +117,33 @@ def decode_video_frames_to_pil(video_data: bytes, target_fps: float, max_frames:
                     pil_frames.append(canvas)
 
                     if len(pil_frames) >= max_frames:
-                        break
+                        return True
                     next_sample += sample_step
                 frame_idx += 1
+                return False
+
+            if decoder:
+                for packet in container.demux(stream):
+                    try:
+                        frames = decoder.decode(packet)
+                    except (av.error.EOFError, av.error.FFmpegError):
+                        break
+                    for frame in frames:
+                        if _process_frame(frame):
+                            break
+                    if len(pil_frames) >= max_frames:
+                        break
+                if len(pil_frames) < max_frames:
+                    try:
+                        for frame in decoder.decode():
+                            if _process_frame(frame):
+                                break
+                    except (av.error.EOFError, av.error.FFmpegError, Exception):
+                        pass
+            else:
+                for frame in container.decode(video=0):
+                    if _process_frame(frame):
+                        break
 
     except Exception as e:
         logger.warning(f"Error during PyAV frame decoding: {e}")
@@ -128,6 +174,9 @@ def _sync_convert_video_to_animated_webp(video_data: bytes) -> BytesIO:
         if len(pil_frames) == 1:
             logger.warning("Video sticker has only 1 frame; duplicating to satisfy WhatsApp animated requirement")
             duplicate_canvas = pil_frames[0].copy()
+            px = duplicate_canvas.load()
+            r, g, b, a = px[0, 0]
+            px[0, 0] = (r, g, b, 1 if a == 0 else 0)
             pil_frames.append(duplicate_canvas)
 
         output = _encode_animated_webp_under_limit(pil_frames, frame_duration_ms, WA_ANIM_TARGET)

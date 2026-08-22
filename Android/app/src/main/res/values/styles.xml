@@ -22,7 +22,17 @@
 
     <style name="ButtonShapeAppearance" parent="">
         <item name="cornerFamily">rounded</item>
-        <item name="cornerSize">8dp</item>
+        <item name="cornerSize">20dp</item>
+    </style>
+
+    <style name="ShapeAppearance.M3.Card.ExtraLarge" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">24dp</item>
+    </style>
+
+    <style name="ShapeAppearance.M3.Pill" parent="ShapeAppearance.Material3.Corner.Full">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">50%</item>
     </style>
 
     <style name="WindowAnimations">
@@ -39,6 +49,12 @@
         <item name="android:colorBackground">@color/amoled_background</item>
         <item name="colorSurface">@color/amoled_background</item>
         <item name="colorSurfaceVariant">@color/amoled_surface_variant</item>
+        <item name="colorSurfaceContainerLowest">@color/amoled_background</item>
+        <item name="colorSurfaceContainerLow">@color/amoled_background</item>
+        <item name="colorSurfaceContainer">@color/amoled_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/amoled_surface_high</item>
+        <item name="colorSurfaceContainerHighest">@color/amoled_surface_highest</item>
+        <item name="colorOutlineVariant">@color/amoled_stroke</item>
         <item name="android:navigationBarColor">@color/amoled_background</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
@@ -54,11 +70,12 @@
         <item name="android:colorBackground">@color/amoled_background</item>
         <item name="colorSurface">@color/amoled_background</item>
         <item name="colorSurfaceVariant">@color/amoled_surface_variant</item>
-        <item name="colorSurfaceContainer">@color/amoled_background</item>
-        <item name="colorSurfaceContainerHigh">@color/amoled_surface_variant</item>
-        <item name="colorSurfaceContainerHighest">@color/amoled_surface_variant</item>
-        <item name="colorSurfaceContainerLow">@color/amoled_background</item>
         <item name="colorSurfaceContainerLowest">@color/amoled_background</item>
+        <item name="colorSurfaceContainerLow">@color/amoled_background</item>
+        <item name="colorSurfaceContainer">@color/amoled_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/amoled_surface_high</item>
+        <item name="colorSurfaceContainerHighest">@color/amoled_surface_highest</item>
+        <item name="colorOutlineVariant">@color/amoled_stroke</item>
         <item name="android:navigationBarColor">@color/amoled_background</item>
     </style>
 

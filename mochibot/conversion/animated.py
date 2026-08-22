@@ -113,6 +113,12 @@ def _encode_animated_webp_under_limit(
     if len(pil_frames) < 2:
         raise Exception(f"Cannot create animated WebP with only {len(pil_frames)} frame(s). Need at least 2.")
 
+    # Ensure second frame is not bit-for-bit identical to the first frame so libwebp does not collapse them to 1 frame / static WebP
+    if len(pil_frames) >= 2:
+        px = pil_frames[1].load()
+        r, g, b, a = px[0, 0]
+        px[0, 0] = (r, g, b, 1 if a == 0 else 0)
+
     def _try(frames, dur_ms, q, method, alpha_q=90):
         buf = BytesIO()
         frames[0].save(
@@ -202,6 +208,13 @@ def _encode_animated_webp_under_limit(
             )
 
         if best_buf is not None:
+            buf_data = best_buf.getvalue()
+            if _count_webp_frames(buf_data) < 2 or not _is_animated_webp_bytes(buf_data):
+                logger.warning("Encoded WebP has <2 frames; wrapping as 2-frame animation")
+                best_buf.close()
+                from .static import convert_to_whatsapp_one_frame_animation
+                return convert_to_whatsapp_one_frame_animation(pil_frames[0])
+
             logger.info(
                 f"✓ Animated WebP: {len(cur_frames)} frames "
                 f"(decimation={decimation}x), quality={best_q}, method={used_method}, "

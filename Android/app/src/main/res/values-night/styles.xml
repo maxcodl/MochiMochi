@@ -6,6 +6,10 @@
         <!-- Makes status bar icons light (for dark backgrounds) -->
         <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>
         <item name="colorControlNormal">?attr/colorOnSurface</item>
+
+        <!-- Smooth Transitions -->
+        <item name="android:windowAnimationStyle">@style/WindowAnimations</item>
+        <item name="materialButtonStyle">@style/AppButtonStyle</item>
     </style>
 
 </resources>

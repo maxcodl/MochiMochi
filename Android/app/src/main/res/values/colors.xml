@@ -3,5 +3,17 @@
     <color name="colorPrimary">@android:color/transparent</color>
     <color name="colorPrimaryDark">#000000</color>
     <color name="amoled_background">#000000</color>
-    <color name="amoled_surface_variant">#111111</color>
+    <color name="amoled_surface_container">#121212</color>
+    <color name="amoled_surface_variant">#181818</color>
+    <color name="amoled_surface_high">#1E1E1E</color>
+    <color name="amoled_surface_highest">#282828</color>
+    <color name="amoled_stroke">#242424</color>
+    <color name="amoled_on_surface">#EEEEEE</color>
+    <color name="amoled_on_surface_variant">#A0A0A0</color>
+
+    <color name="dark_background">#0D0D0D</color>
+    <color name="dark_surface_container">#1A1A1A</color>
+    <color name="dark_surface_high">#242424</color>
+    <color name="dark_surface_highest">#303030</color>
+    <color name="dark_stroke">#282828</color>
 </resources>

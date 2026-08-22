@@ -28,7 +28,7 @@ import androidx.appcompat.widget.Toolbar;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
-import com.google.android.material.switchmaterial.SwitchMaterial;
+import com.google.android.material.materialswitch.MaterialSwitch;
 import com.kawai.mochi.R;
 
 import java.io.File;
@@ -69,8 +69,8 @@ public class SettingsActivity extends BaseActivity implements ThumbnailRegenerat
         Button chooseFolderButton = findViewById(R.id.choose_folder_button);
         Button resetToDefaultButton = findViewById(R.id.reset_to_default_button);
         RadioGroup themeRadioGroup = findViewById(R.id.theme_radio_group);
-        SwitchMaterial askPackPickerSwitch = findViewById(R.id.ask_pack_picker_switch);
-        SwitchMaterial enableAnimationsSwitch = findViewById(R.id.enable_animations_switch);
+        MaterialSwitch askPackPickerSwitch = findViewById(R.id.ask_pack_picker_switch);
+        MaterialSwitch enableAnimationsSwitch = findViewById(R.id.enable_animations_switch);
         Button runDiagnosticsButton = findViewById(R.id.run_diagnostics_button);
         Button githubButton = findViewById(R.id.github_button);
         Button telegramButton = findViewById(R.id.telegram_button);

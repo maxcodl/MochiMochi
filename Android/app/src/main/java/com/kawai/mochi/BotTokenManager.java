@@ -28,7 +28,7 @@ public class BotTokenManager {
                     context,
                     ENCRYPTED_PREFS_NAME,
                     masterKey,
-                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SKEY_STREAM,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                     EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             );
 
