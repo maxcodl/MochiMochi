@@ -224,6 +224,9 @@ abstract class AddStickerPackActivity : BaseActivity() {
 
     private fun finishChunkSession(cancelled: Boolean) {
         resetChunkState()
+        // WhatsApp commits the whitelist after returning its result, so the onResume
+        // refresh can read stale state. Re-check once it has settled.
+        window.decorView.postDelayed({ StickerUpdateManager.triggerUpdate() }, 1000)
         if (!cancelled) {
             Toast.makeText(
                 this@AddStickerPackActivity,
