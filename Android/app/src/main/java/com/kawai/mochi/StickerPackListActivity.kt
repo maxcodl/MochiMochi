@@ -14,6 +14,9 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.Toolbar
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -22,6 +25,7 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import com.google.android.material.appbar.AppBarLayout
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -212,6 +216,19 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         })
         itemTouchHelper.attachToRecyclerView(packRecyclerView)
 
+        // Hide the status bar together with the toolbar once it has scrolled away.
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        var statusBarHidden = false
+        findViewById<AppBarLayout>(R.id.appbar).addOnOffsetChangedListener { appBar, offset ->
+            val hide = appBar.totalScrollRange > 0 && offset <= -appBar.totalScrollRange
+            if (hide != statusBarHidden) {
+                statusBarHidden = hide
+                if (hide) insetsController.hide(WindowInsetsCompat.Type.statusBars())
+                else insetsController.show(WindowInsetsCompat.Type.statusBars())
+            }
+        }
+
         updateEmptyState()
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -395,12 +412,9 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         if (stickerPackList.isEmpty()) {
             packRecyclerView.visibility = View.GONE
             emptyStateLayout.visibility = View.VISIBLE
-            mainFab.visibility = View.GONE
-            closeFabMenu()
         } else {
             packRecyclerView.visibility = View.VISIBLE
             emptyStateLayout.visibility = View.GONE
-            mainFab.visibility = View.VISIBLE
         }
     }
 

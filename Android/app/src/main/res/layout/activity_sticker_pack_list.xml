@@ -21,6 +21,7 @@
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
+            app:layout_scrollFlags="scroll|enterAlways|snap"
             app:titleTextColor="?attr/colorOnSurface"
             tools:title="@string/app_name" />
 
@@ -236,10 +237,8 @@
         android:layout_gravity="bottom|end"
         android:layout_margin="20dp"
         android:contentDescription="@string/import_label"
-        android:visibility="gone"
         app:shapeAppearanceOverlay="@style/ShapeAppearance.M3.Pill"
         app:elevation="4dp"
-        app:srcCompat="@drawable/ic_fab_add"
-        tools:visibility="visible" />
+        app:srcCompat="@drawable/ic_fab_add" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
