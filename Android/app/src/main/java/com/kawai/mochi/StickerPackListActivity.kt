@@ -5,7 +5,10 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -14,9 +17,12 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.widget.Toolbar
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
@@ -229,6 +235,17 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
             }
         }
 
+        // Insets are applied manually so hiding the status bar doesn't shift the layout:
+        // the toolbar reserves the status bar height as a margin and scrolls it away with itself.
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { root, insets ->
+            val nav = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            root.updatePadding(left = nav.left, right = nav.right, bottom = nav.bottom)
+            toolbar.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.statusBars()).top
+            }
+            WindowInsetsCompat.CONSUMED
+        }
+
         updateEmptyState()
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -240,6 +257,21 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
         
         // Listen for thumbnail regeneration progress
         ThumbnailRegenerationManager.addListener(this)
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(Menu.NONE, MENU_SETTINGS, Menu.NONE, R.string.settings)
+            .setIcon(R.drawable.ic_settings)
+            .setShowAsAction(MenuItem.SHOW_AS_ACTION_ALWAYS)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == MENU_SETTINGS) {
+            settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
+            return true
+        }
+        return super.onOptionsItemSelected(item)
     }
 
     override fun onDestroy() {
@@ -543,5 +575,6 @@ class StickerPackListActivity : AddStickerPackActivity(), ThumbnailRegenerationM
     companion object {
         const val EXTRA_STICKER_PACK_LIST_DATA = "sticker_pack_list"
         private const val STICKER_PREVIEW_DISPLAY_LIMIT = 5
+        private const val MENU_SETTINGS = 1001
     }
 }
