@@ -23,7 +23,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -523,6 +525,16 @@ public class WastickerParser {
 
                     boolean detectedAnimated = false;
                     JSONArray stickers = packJson.optJSONArray("stickers");
+                    DocumentFile thumbDirDoc = null;
+                    Map<String, DocumentFile> thumbIndex = new HashMap<>();
+                    if (stickers != null && isSAF) {
+                        thumbDirDoc = openThumbDir(context, identifier, packDirDoc);
+                        if (thumbDirDoc != null) {
+                            for (DocumentFile f : thumbDirDoc.listFiles()) {
+                                if (f.getName() != null) thumbIndex.put(f.getName(), f);
+                            }
+                        }
+                    }
                     if (stickers != null) {
                         for (int s = 0; s < stickers.length(); s++) {
                             String imageFile = stickers.getJSONObject(s).optString("image_file", "");
@@ -531,15 +543,18 @@ public class WastickerParser {
                                 copyToPackFolder(context, src, identifier, imageFile, packDirDoc);
 
                                 // Prefer a thumbnail the bot already generated and shipped
-                                // inside the .wasticker zip (thumb_<imageFile>) — just copy
+                                // inside the .wasticker zip (thumbnails/thumb_<imageFile>, or
+                                // top-level thumb_<imageFile> in older zips) — just copy
                                 // it in. Only fall back to generating one on-device (slow:
                                 // decode + resize + re-encode, plus extra SAF round-trips)
                                 // for packs from an older bot version that didn't include one.
                                 String thumbFileName = "thumb_" + imageFile;
-                                File thumbSrc = new File(tempDir, thumbFileName);
+                                File thumbSrc = new File(new File(tempDir, "thumbnails"), thumbFileName);
+                                if (!thumbSrc.exists()) thumbSrc = new File(tempDir, thumbFileName);
                                 if (thumbSrc.exists()) {
                                     try {
-                                        copyToPackFolder(context, thumbSrc, identifier, thumbFileName, packDirDoc);
+                                        copyThumbToPack(context, thumbSrc, identifier, thumbFileName,
+                                                thumbDirDoc, thumbIndex);
                                     } catch (IOException e) {
                                         Log.w(TAG, "Failed to copy pre-generated thumbnail for " + imageFile
                                                 + ", falling back to on-device generation", e);
@@ -651,16 +666,46 @@ public class WastickerParser {
                 if (destFile == null) destFile = packDir.createFile("image/*", fileName);
             }
             if (destFile == null) throw new IOException("Could not create file: " + fileName);
-
-            try (InputStream is = new FileInputStream(src);
-                 OutputStream os = context.getContentResolver().openOutputStream(destFile.getUri())) {
-                byte[] buffer = new byte[8192]; int len;
-                while ((len = is.read(buffer)) > 0) os.write(buffer, 0, len);
-            }
+            copyFileToUri(context, src, destFile.getUri());
         } else {
             File dest = new File(new File(new File(rootPath), packId), fileName);
             copyFile(src, dest);
         }
+    }
+
+    /** SAF only: opens the pack's thumbnails/ folder once per import. */
+    private static DocumentFile openThumbDir(Context context, String packId, DocumentFile packDirDoc) {
+        StickerContentProvider provider = StickerContentProvider.getInstance();
+        if (provider != null) return provider.getOrCreateSafSubdirCached(context, packId, "thumbnails");
+        if (packDirDoc == null) return null;
+        DocumentFile dir = packDirDoc.findFile("thumbnails");
+        return dir != null ? dir : packDirDoc.createDirectory("thumbnails");
+    }
+
+    /**
+     * Copies a bot-shipped thumbnail into {@code <pack>/thumbnails/}, where
+     * StickerContentProvider reads it. On SAF, {@code thumbIndex} is the folder
+     * listed once per pack, so no per-sticker findFile() scan.
+     */
+    private static void copyThumbToPack(Context context, File src, String packId, String thumbName,
+                                        DocumentFile thumbDir, Map<String, DocumentFile> thumbIndex)
+            throws IOException {
+        if (isCustomPathUri(context)) {
+            if (thumbDir == null) throw new IOException("thumbnails folder unavailable: " + packId);
+            DocumentFile dest = thumbIndex.get(thumbName);
+            if (dest == null) {
+                dest = thumbDir.createFile("image/webp", thumbName);
+                if (dest == null) throw new IOException("Could not create file: " + thumbName);
+                thumbIndex.put(thumbName, dest);
+            }
+            copyFileToUri(context, src, dest.getUri());
+        } else {
+            File dir = new File(new File(new File(getStickerFolderPath(context)), packId), "thumbnails");
+            if (!dir.exists()) dir.mkdirs();
+            copyFile(src, new File(dir, thumbName));
+        }
+        File staleMirror = new File(StickerContentProvider.getThumbMirrorDir(context, packId), thumbName);
+        if (staleMirror.exists()) staleMirror.delete();
     }
 
     private static JSONObject getOrSeedMasterRoot(Context context) throws IOException, JSONException {
@@ -1440,8 +1485,11 @@ public class WastickerParser {
     }
 
     private static void copyFileToUri(Context context, File src, Uri destUri) throws IOException {
+        // "wt" truncates: some providers leave trailing bytes with plain "w"
+        // when overwriting a larger file.
         try (InputStream is = new FileInputStream(src);
-             OutputStream os = context.getContentResolver().openOutputStream(destUri)) {
+             OutputStream os = context.getContentResolver().openOutputStream(destUri, "wt")) {
+            if (os == null) throw new IOException("Cannot open output stream: " + destUri);
             byte[] buffer = new byte[8192]; int len;
             while ((len = is.read(buffer)) > 0) os.write(buffer, 0, len);
         }

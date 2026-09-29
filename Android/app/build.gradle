@@ -10,7 +10,7 @@ android {
         applicationId "com.kawai.mochi"
         minSdk 21
         targetSdk 35
-        versionCode 6
+        versionCode 8
         versionName "1.9.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         
